@@ -2,6 +2,23 @@
 
 🚨 SafeNest is an intelligent mobile application designed to detect falls and provide emergency assistance for seniors. It combines AI-powered fall detection with real-time caregiver coordination and emergency response capabilities.
 
+## 📥 Download APK
+
+**📱 Latest Release:** [Download SafeNest APK v1.0.0](https://github.com/yourusername/safenest/releases/latest/download/SafeNest-release.apk) *(4.06 MB)*
+
+> **Note:** After uploading your first release on GitHub:
+> 1. Go to [Releases](https://github.com/yourusername/safenest/releases)
+> 2. Click "Create a new release"
+> 3. Tag version: `v1.0.0`
+> 4. Upload `SafeNest-release.apk` from your local folder
+> 5. Publish release
+> 6. Update the link above with your actual username
+
+**Installation Instructions:**
+- Enable "Install from Unknown Sources" in Android settings
+- Download and install the APK
+- Grant all required permissions (Location, Sensors, Notifications)
+
 ## ✨ Features
 
 ### 🎯 **Intelligent Fall Detection**
