@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "167528436834",
+    "firebase_url": "https://safenest-d2db0-default-rtdb.firebaseio.com",
+    "project_id": "safenest-d2db0",
+    "storage_bucket": "safenest-d2db0.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:167528436834:android:0f56359c983e3ea9ec6d3b",
+        "android_client_info": {
+          "package_name": "com.safenest.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA-GlAc7MNRTQbloPf725KkcLV3C8TMlNI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

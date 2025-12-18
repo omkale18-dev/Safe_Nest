@@ -1,0 +1,9 @@
+{
+  "name": "SafeNest",
+  "description": "A comprehensive personal safety application for seniors and caregivers, featuring fall detection, SOS alerts, and real-time location tracking.",
+  "requestFramePermissions": [
+    "geolocation",
+    "camera",
+    "microphone"
+  ]
+}

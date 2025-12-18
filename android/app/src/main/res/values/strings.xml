@@ -1,0 +1,9 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SafeNest</string>
+    <string name="title_activity_main">SafeNest</string>
+    <string name="package_name">com.safenest.app</string>
+    <string name="custom_url_scheme">com.safenest.app</string>
+    <string name="widget_description">Emergency SOS button for quick access</string>
+    <string name="sos_button">Emergency SOS Button</string>
+</resources>
