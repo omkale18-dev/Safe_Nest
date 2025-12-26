@@ -130,8 +130,7 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
 
   return (
     <div className="flex flex-col h-full bg-gray-50 relative">
-      
-      {/* Header */}
+     
             <div className={`shadow-sm px-4 py-4 flex items-center justify-between z-[50] bg-white flex-shrink-0`}>
             {/* Senior Name */}
             <div className="flex-1">
@@ -151,7 +150,6 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
                 </div>
       </div>
 
-      {/* CONTENT: HOME VIEW */}
       {activeTab === 'home' && (
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             <div>
