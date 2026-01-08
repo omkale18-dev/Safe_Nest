@@ -1,23 +1,23 @@
-import React from 'react';
-import { Heart, Thermometer, Gauge } from 'lucide-react';
+import React, { useState } from 'react';
+import { Heart, Droplet, Thermometer, Gauge, Activity, Plus } from 'lucide-react';
 import { VitalReading } from '../types';
+import { ManualVitalsEntry } from './ManualVitalsEntry';
 
 interface CaregiverVitalsViewProps {
   vitalReadings: VitalReading[];
   onAddVital: (vital: Omit<VitalReading, 'id' | 'timestamp'>) => void;
-  seniorId?: string; // Optional senior ID for filtering vitals in multi-senior households
 }
 
 export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
   vitalReadings,
   onAddVital,
-  seniorId
 }) => {
+  const [showVitalsEntry, setShowVitalsEntry] = useState(false);
 
-  // Get latest readings for each vital type - filter for manual only
+  // Get latest readings for each vital type
   const getLatestVital = (type: VitalReading['type']) => {
     const filtered = vitalReadings
-      .filter(v => v.type === type && v.source === 'manual')
+      .filter(v => v.type === type)
       .sort((a, b) => {
         const dateA = a.timestamp instanceof Date ? a.timestamp : new Date(a.timestamp);
         const dateB = b.timestamp instanceof Date ? b.timestamp : new Date(b.timestamp);
@@ -30,6 +30,8 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
   const latestHR = getLatestVital('heartRate');
   const latestTemp = getLatestVital('temperature');
   const latestWeight = getLatestVital('weight');
+  const latestBG = getLatestVital('bloodSugar');
+  const latestSpO2 = getLatestVital('spo2');
 
   const formatTimestamp = (timestamp: Date | string) => {
     const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
@@ -188,15 +190,95 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
           </div>
         )}
 
+        {/* Blood Sugar Card */}
+        {latestBG && (
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+            <div className="flex justify-between items-start mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-pink-50 rounded-full flex items-center justify-center">
+                  <Droplet className="text-pink-500" size={24} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-900 text-lg">Blood Sugar</h3>
+                  <p className="text-gray-500 text-sm">{formatTimestamp(latestBG.timestamp)}</p>
+                </div>
+              </div>
+              <span
+                className={`px-3 py-1 rounded-full text-xs font-bold ${
+                  (latestBG.value as number) > 180 || (latestBG.value as number) < 70
+                    ? 'bg-red-100 text-red-700'
+                    : 'bg-green-100 text-green-700'
+                }`}
+              >
+                {(latestBG.value as number) > 180 ? 'High' : (latestBG.value as number) < 70 ? 'Low' : 'Normal'}
+              </span>
+            </div>
+
+            <div className="flex items-end gap-2 mb-2">
+              <span className="text-5xl font-black text-gray-900">{Math.round(latestBG.value as number)}</span>
+              <span className="text-gray-500 font-bold mb-1">mg/dL</span>
+            </div>
+          </div>
+        )}
+
+        {/* SpO2 Card */}
+        {latestSpO2 && (
+          <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+            <div className="flex justify-between items-start mb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center">
+                  <div className="text-blue-500 font-bold text-lg">O₂</div>
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-900 text-lg">Blood Oxygen</h3>
+                  <p className="text-gray-500 text-sm">{formatTimestamp(latestSpO2.timestamp)}</p>
+                </div>
+              </div>
+              <span
+                className={`px-3 py-1 rounded-full text-xs font-bold ${
+                  (latestSpO2.value as number) < 95
+                    ? 'bg-red-100 text-red-700'
+                    : 'bg-green-100 text-green-700'
+                }`}
+              >
+                {(latestSpO2.value as number) < 95 ? 'Low' : 'Good'}
+              </span>
+            </div>
+
+            <div className="flex items-end gap-2 mb-2">
+              <span className="text-5xl font-black text-gray-900">{Math.round(latestSpO2.value as number)}</span>
+              <span className="text-gray-500 font-bold mb-1">%</span>
+            </div>
+          </div>
+        )}
+
         {/* Empty State */}
-        {!latestBP && !latestHR && !latestTemp && !latestWeight && (
+        {!latestBP && !latestHR && !latestTemp && !latestWeight && !latestBG && (
           <div className="bg-gray-50 rounded-2xl p-8 text-center border border-gray-100 mt-6">
             <Gauge className="mx-auto mb-4 text-gray-400" size={48} />
             <p className="text-gray-600 font-semibold">No vitals recorded yet</p>
             <p className="text-sm text-gray-500 mt-1">Add vital readings below to track daily data</p>
           </div>
         )}
+
+        {/* Add Vitals Button */}
+        <button
+          onClick={() => setShowVitalsEntry(true)}
+          className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-4 rounded-xl flex items-center justify-center gap-2 shadow-lg transition-all active:scale-95 mt-6"
+        >
+          <Plus size={24} strokeWidth={2.5} />
+          Add Vital Reading
+        </button>
       </div>
+
+      {/* Manual Vitals Entry Modal */}
+      {showVitalsEntry && (
+        <ManualVitalsEntry
+          onSave={handleSaveVital}
+          onClose={() => setShowVitalsEntry(false)}
+          enteredBy="caregiver"
+        />
+      )}
     </div>
   );
 };

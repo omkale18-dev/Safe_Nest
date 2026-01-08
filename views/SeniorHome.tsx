@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Heart, Activity, MapPin, Zap, LogOut, Mic, Pill, AlertCircle, Droplets, Gauge } from 'lucide-react';
-import { SeniorStatus, UserProfile, Medicine, MedicineLog, DoctorAppointment, VitalReading } from '../types';
+import { Heart, Activity, MapPin, Zap, LogOut, Mic, Pill, AlertCircle, Droplets } from 'lucide-react';
+import { SeniorStatus, UserProfile, Medicine, MedicineLog, DoctorAppointment } from '../types';
 import { MedicineReminders } from './MedicineReminders';
 import { useLanguage } from '../i18n/LanguageContext';
 
@@ -28,7 +28,6 @@ interface SeniorHomeProps {
   onOpenWaterTracker?: () => void;
   // Upcoming appointments (read-only)
   upcomingAppointments?: DoctorAppointment[];
-  vitalReadings?: VitalReading[];
 }
 
 export const SeniorHome: React.FC<SeniorHomeProps> = ({ 
@@ -50,70 +49,9 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
   onSkipMedicine,
   onSnoozeMedicine,
   onOpenWaterTracker,
-  upcomingAppointments = [],
-  vitalReadings = []
+  upcomingAppointments = []
 }) => {
   const { t } = useLanguage();
-  const [cooldownUntil, setCooldownUntil] = React.useState<Date | null>(null);
-  const [remainingTime, setRemainingTime] = React.useState<string>('');
-  
-  useEffect(() => {
-    const lastEntryStr = localStorage.getItem('vitalsLastCompletedEntry');
-    if (lastEntryStr) {
-      const lastEntry = new Date(lastEntryStr);
-      const cooldownEnd = new Date(lastEntry.getTime() + 7 * 24 * 60 * 60 * 1000);
-      const now = new Date();
-      if (now < cooldownEnd) {
-        setCooldownUntil(cooldownEnd);
-      } else {
-        setCooldownUntil(null);
-        localStorage.removeItem('vitalsLastCompletedEntry');
-      }
-    }
-  }, [vitalReadings]);
-
-  useEffect(() => {
-    if (!cooldownUntil) return;
-    
-    const updateTimer = () => {
-      const now = new Date();
-      const diff = cooldownUntil.getTime() - now.getTime();
-      
-      if (diff <= 0) {
-        setCooldownUntil(null);
-        setRemainingTime('');
-        localStorage.removeItem('vitalsLastCompletedEntry');
-        
-        // Clear today's vitals tracking when cooldown expires
-        const today = new Date().toDateString();
-        localStorage.removeItem(`vitals_entered_${today}`);
-        return;
-      }
-      
-      const days = Math.floor(diff / (24 * 60 * 60 * 1000));
-      const hours = Math.floor((diff % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
-      const mins = Math.floor((diff % (60 * 60 * 1000)) / (60 * 1000));
-      
-      setRemainingTime(`${days}d ${hours}h ${mins}m`);
-    };
-    
-    updateTimer();
-    const interval = setInterval(updateTimer, 60000);
-    return () => clearInterval(interval);
-  }, [cooldownUntil]);
-
-  useEffect(() => {
-    const lastEntryStr = localStorage.getItem('vitalsLastCompletedEntry');
-    if (lastEntryStr) {
-      const lastEntry = new Date(lastEntryStr);
-      const lastEntryDate = lastEntry.toDateString();
-      const today = new Date().toDateString();
-      
-      if (lastEntryDate !== today) {
-        localStorage.removeItem(`vitals_entered_${lastEntryDate}`);
-      }
-    }
-  }, []);
   
   useEffect(() => {
     console.log('[SeniorHome] onSignOut:', typeof onSignOut);
@@ -122,21 +60,6 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
   const miniMarkerRef = useRef<any>(null);
-
-  // Latest manual vitals
-  const getLatestVital = (type: 'bloodPressure' | 'heartRate') => {
-    const filtered = vitalReadings
-      .filter(v => v.type === type && v.source === 'manual')
-      .sort((a, b) => {
-        const dateA = a.timestamp instanceof Date ? a.timestamp : new Date(a.timestamp);
-        const dateB = b.timestamp instanceof Date ? b.timestamp : new Date(b.timestamp);
-        return dateB.getTime() - dateA.getTime();
-      });
-    return filtered[0];
-  };
-
-  const latestHR = getLatestVital('heartRate');
-  const latestBP = getLatestVital('bloodPressure');
 
   // Initialize Mini Map with robust guards and updates
   useEffect(() => {
@@ -288,92 +211,67 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
 
       {/* Vitals */}
       <div>
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <Activity size={20} className="text-blue-600" />
-            <h2 className="text-lg font-semibold text-gray-900">{t.myVitals}</h2>
-          </div>
+        <div className="flex items-center gap-2 mb-3">
+          <Activity size={20} className="text-blue-600" />
+          <h2 className="text-lg font-semibold text-gray-900">{t.myVitals}</h2>
         </div>
-
-        {/* Cooldown Message in SeniorHome */}
-        {cooldownUntil && (
-          <div className="mb-4 bg-amber-50 border-2 border-amber-200 rounded-xl p-3 flex items-start gap-2">
-            <div className="text-lg mt-0.5">⏱️</div>
-            <div>
-              <p className="font-bold text-amber-900 text-sm">All vitals logged!</p>
-              <p className="text-xs text-amber-700">Come back in {remainingTime}</p>
-            </div>
-          </div>
-        )}
-
         <div className="grid grid-cols-2 gap-4">
-          {/* Heart Rate Card (manual latest) */}
+          {/* Heart Rate Card */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-between h-32">
             <div className="flex justify-between items-start mb-2">
               <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center">
                 <Heart size={20} className="text-red-500" fill="currentColor" />
               </div>
-              {latestHR && (
-                <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${
-                  (latestHR.value as number) > 100 || (latestHR.value as number) < 60
-                    ? 'bg-yellow-50 text-yellow-700'
-                    : 'bg-green-50 text-green-700'
-                }`}>
-                  {(latestHR.value as number) > 100 || (latestHR.value as number) < 60 ? t.abnormal || 'Check' : t.normal}
-                </span>
+              {isFitConnected && status.heartRate && (
+                <span className="text-[10px] font-semibold text-green-600 uppercase bg-green-50 px-2 py-0.5 rounded-full">{t.normal}</span>
               )}
             </div>
             <div>
-              <div className="flex items-end gap-1">
-                <span className="text-4xl font-bold text-gray-900">{latestHR ? Math.round(latestHR.value as number) : '--'}</span>
-                <span className="text-sm font-medium text-gray-500 mb-1">{t.bpm}</span>
-              </div>
-              <p className="text-xs font-medium text-gray-400 mt-1">Heart Rate</p>
+              {isFitConnected ? (
+                <>
+                  <div className="flex items-end gap-1">
+                    <span className="text-4xl font-bold text-gray-900">{status.heartRate ?? '--'}</span>
+                    <span className="text-sm font-medium text-gray-500 mb-1">{t.bpm}</span>
+                  </div>
+                  <p className="text-xs font-medium text-gray-400 mt-1">Heart Rate</p>
+                </>
+              ) : (
+                <div className="text-center py-2">
+                  <div className="text-2xl font-bold text-gray-300 mb-1">--</div>
+                  <p className="text-[10px] font-semibold text-gray-400">Connect smartwatch</p>
+                </div>
+              )}
             </div>
           </div>
           
-          {/* Blood Pressure Card (manual latest replaces SpO2) */}
+          {/* SpO2 Card */}
           <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-between h-32">
             <div className="flex justify-between items-start mb-2">
-              <div className="w-10 h-10 rounded-full bg-orange-50 flex items-center justify-center">
-                <Gauge size={20} className="text-orange-500" />
+              <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center">
+                <div className="text-blue-500 font-bold text-lg">O₂</div>
               </div>
-              {latestBP && (
-                <span className={`text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full ${
-                  (latestBP.value as { systolic: number; diastolic: number }).systolic > 140
-                    ? 'bg-red-50 text-red-700'
-                    : 'bg-green-50 text-green-700'
-                }`}>
-                  {(latestBP.value as { systolic: number }).systolic > 140 ? t.elevated || 'Elevated' : t.normal}
-                </span>
+              {isFitConnected && status.spo2 && (
+                <span className="text-[10px] font-semibold text-green-600 uppercase bg-green-50 px-2 py-0.5 rounded-full">{t.good}</span>
               )}
             </div>
             <div>
-              <div className="flex items-end gap-1">
-                <span className="text-3xl font-bold text-gray-900">
-                  {latestBP
-                    ? `${Math.round((latestBP.value as { systolic: number; diastolic: number }).systolic)}/${Math.round((latestBP.value as { systolic: number; diastolic: number }).diastolic)}`
-                    : '--/--'}
-                </span>
-                <span className="text-sm font-medium text-gray-500 mb-1">mmHg</span>
-              </div>
-              <p className="text-xs font-medium text-gray-400 mt-1">Blood Pressure</p>
+              {isFitConnected ? (
+                <>
+                  <div className="flex items-end gap-1">
+                    <span className="text-4xl font-bold text-gray-900">{status.spo2 ?? '--'}</span>
+                    <span className="text-sm font-medium text-gray-500 mb-1">%</span>
+                  </div>
+                  <p className="text-xs font-medium text-gray-400 mt-1">Blood Oxygen</p>
+                </>
+              ) : (
+                <div className="text-center py-2">
+                  <div className="text-2xl font-bold text-gray-300 mb-1">--</div>
+                  <p className="text-[10px] font-semibold text-gray-400">Connect smartwatch</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
-
-        {/* Add Vitals Button */}
-        <button
-          disabled={!!cooldownUntil}
-          className={`w-full mt-4 py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 ${
-            cooldownUntil
-              ? 'bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200'
-              : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md active:scale-95 border border-blue-600'
-          }`}
-        >
-          <Heart size={18} />
-          Add Vitals
-        </button>
       </div>
 
       {/* Safety Status Card */}
