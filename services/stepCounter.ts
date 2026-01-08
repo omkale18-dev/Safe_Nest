@@ -1,5 +1,6 @@
 // Step Counter Service using Device Accelerometer
 // Detects step patterns from phone motion sensors
+// Supports background tracking via Service Worker
 
 interface StepData {
   steps: number;
@@ -15,9 +16,41 @@ class StepCounterService {
   private peakThreshold: number = 25; // Sensitivity threshold for step detection
   private minStepInterval: number = 300; // Minimum milliseconds between steps (3-4 steps per second max)
   private listeners: ((steps: number) => void)[] = [];
+  private workerRegistration: ServiceWorkerRegistration | null = null;
+  private port: MessagePort | null = null;
 
   constructor() {
     this.loadDailySteps();
+    this.initializeServiceWorker();
+  }
+
+  /**
+   * Initialize and register the service worker for background tracking
+   */
+  private async initializeServiceWorker(): Promise<void> {
+    if (!('serviceWorker' in navigator)) {
+      console.warn('[StepCounter] Service Worker not supported');
+      return;
+    }
+
+    try {
+      this.workerRegistration = await navigator.serviceWorker.register(
+        '/stepCounterWorker.js',
+        { scope: '/' }
+      );
+      console.log('[StepCounter] Service Worker registered');
+
+      // Listen for messages from service worker
+      navigator.serviceWorker.onmessage = (event) => {
+        const { type, steps } = event.data;
+        if (type === 'STEP_UPDATE') {
+          this.steps = steps;
+          this.notifyListeners();
+        }
+      };
+    } catch (error) {
+      console.warn('[StepCounter] Failed to register service worker:', error);
+    }
   }
 
   /**
@@ -108,6 +141,15 @@ class StepCounterService {
 
     this.checkAndResetDaily();
 
+    // Start tracking in service worker
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'START_TRACKING',
+      });
+      console.log('[StepCounter] Background tracking started via Service Worker');
+    }
+
+    // Also start local tracking for active app
     // Check for DeviceMotionEvent support
     if (typeof DeviceMotionEvent === 'undefined') {
       console.warn('DeviceMotionEvent not supported on this device');
@@ -160,6 +202,14 @@ class StepCounterService {
    */
   public stopTracking(): void {
     if (!this.isListening) return;
+
+    // Stop service worker tracking
+    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({
+        type: 'STOP_TRACKING',
+      });
+      console.log('[StepCounter] Background tracking stopped');
+    }
 
     window.removeEventListener('devicemotion', () => {});
     this.isListening = false;
