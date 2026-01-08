@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, AlertCircle, Heart, Thermometer, Scale, Droplet, Activity, Wind } from 'lucide-react';
+import { X, AlertCircle, Heart, Thermometer, Scale } from 'lucide-react';
 import { VitalReading } from '../types';
 
 interface ManualVitalsEntryProps {
@@ -9,16 +9,14 @@ interface ManualVitalsEntryProps {
 }
 
 export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, onClose, enteredBy }) => {
-  const [activeTab, setActiveTab] = useState<'bloodPressure' | 'temperature' | 'weight' | 'bloodSugar' | 'heartRate' | 'spo2'>('bloodPressure');
+  const [activeTab, setActiveTab] = useState<'bloodPressure' | 'temperature' | 'weight' | 'heartRate'>('bloodPressure');
   const [systolic, setSystolic] = useState('');
   const [diastolic, setDiastolic] = useState('');
   const [temperature, setTemperature] = useState('');
   const [tempUnit, setTempUnit] = useState<'F' | 'C'>('F');
   const [weight, setWeight] = useState('');
   const [weightUnit, setWeightUnit] = useState<'kg' | 'lbs'>('kg');
-  const [bloodSugar, setBloodSugar] = useState('');
   const [heartRate, setHeartRate] = useState('');
-  const [spo2, setSpo2] = useState('');
   const [notes, setNotes] = useState('');
   const [error, setError] = useState('');
 
@@ -112,39 +110,6 @@ export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, on
         notes: notes || undefined,
       });
       
-    } else if (activeTab === 'bloodSugar') {
-      const bs = parseFloat(bloodSugar);
-      
-      if (!bloodSugar || isNaN(bs)) {
-        setError('Please enter blood sugar');
-        return;
-      }
-      
-      if (bs < 40 || bs > 400) {
-        setError('Blood sugar must be between 40-400 mg/dL');
-        return;
-      }
-      
-      // Warning for dangerous levels
-      if (bs < 70) {
-        if (!window.confirm('⚠️ Low blood sugar detected (<70 mg/dL). Hypoglycemia risk. Save anyway?')) {
-          return;
-        }
-      }
-      
-      if (bs > 180) {
-        if (!window.confirm('⚠️ High blood sugar detected (>180 mg/dL). Save anyway?')) {
-          return;
-        }
-      }
-      
-      onSave({
-        type: 'bloodSugar',
-        value: bs,
-        source: 'manual',
-        enteredBy,
-        notes: notes || undefined,
-      });
     } else if (activeTab === 'heartRate') {
       const hr = parseInt(heartRate);
       
@@ -153,14 +118,14 @@ export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, on
         return;
       }
       
-      if (hr < 30 || hr > 220) {
-        setError('Heart rate must be between 30-220 BPM');
+      if (hr < 40 || hr > 200) {
+        setError('Heart rate must be between 40-200 bpm');
         return;
       }
       
       // Warning for abnormal heart rate
-      if (hr < 50 || hr > 100) {
-        if (!window.confirm(`⚠️ ${hr < 50 ? 'Low' : 'High'} heart rate detected. Save anyway?`)) {
+      if (hr < 60 || hr > 100) {
+        if (!window.confirm('⚠️ Abnormal heart rate detected (<60 or >100 bpm). Save anyway?')) {
           return;
         }
       }
@@ -168,33 +133,6 @@ export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, on
       onSave({
         type: 'heartRate',
         value: hr,
-        source: 'manual',
-        enteredBy,
-        notes: notes || undefined,
-      });
-    } else if (activeTab === 'spo2') {
-      const oxygen = parseInt(spo2);
-      
-      if (!spo2 || isNaN(oxygen)) {
-        setError('Please enter SpO2 level');
-        return;
-      }
-      
-      if (oxygen < 70 || oxygen > 100) {
-        setError('SpO2 must be between 70-100%');
-        return;
-      }
-      
-      // Warning for low oxygen
-      if (oxygen < 95) {
-        if (!window.confirm('⚠️ Low oxygen saturation detected (<95%). This may require medical attention. Save anyway?')) {
-          return;
-        }
-      }
-      
-      onSave({
-        type: 'spo2',
-        value: oxygen,
         source: 'manual',
         enteredBy,
         notes: notes || undefined,
@@ -251,17 +189,6 @@ export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, on
             Weight
           </button>
           <button
-            onClick={() => setActiveTab('bloodSugar')}
-            className={`flex items-center gap-2 px-4 py-3 font-semibold transition-colors ${
-              activeTab === 'bloodSugar'
-                ? 'text-blue-600 border-b-2 border-blue-600'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <Droplet size={18} />
-            Sugar
-          </button>
-          <button
             onClick={() => setActiveTab('heartRate')}
             className={`flex items-center gap-2 px-4 py-3 font-semibold transition-colors ${
               activeTab === 'heartRate'
@@ -269,19 +196,8 @@ export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, on
                 : 'text-gray-500 hover:text-gray-700'
             }`}
           >
-            <Activity size={18} />
-            Pulse
-          </button>
-          <button
-            onClick={() => setActiveTab('spo2')}
-            className={`flex items-center gap-2 px-4 py-3 font-semibold transition-colors ${
-              activeTab === 'spo2'
-                ? 'text-blue-600 border-b-2 border-blue-600'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            <Wind size={18} />
-            SpO2
+            <Heart size={18} />
+            HR
           </button>
         </div>
 
@@ -398,35 +314,11 @@ export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, on
             </div>
           )}
 
-          {/* Blood Sugar */}
-          {activeTab === 'bloodSugar' && (
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-bold text-gray-700 mb-2">Blood Glucose</label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={bloodSugar}
-                    onChange={(e) => setBloodSugar(e.target.value)}
-                    placeholder="120"
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none text-lg font-semibold"
-                  />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">mg/dL</span>
-                </div>
-              </div>
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
-                <p className="text-xs text-blue-800">
-                  <strong>Normal (Fasting):</strong> 70-100 • <strong>Pre-Diabetes:</strong> 100-125 • <strong>Diabetes:</strong> ≥126
-                </p>
-              </div>
-            </div>
-          )}
-
           {/* Heart Rate */}
           {activeTab === 'heartRate' && (
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-bold text-gray-700 mb-2">Heart Rate / Pulse</label>
+                <label className="block text-sm font-bold text-gray-700 mb-2">Heart Rate</label>
                 <div className="relative">
                   <input
                     type="number"
@@ -435,36 +327,12 @@ export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, on
                     placeholder="72"
                     className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none text-lg font-semibold"
                   />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">BPM</span>
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">bpm</span>
                 </div>
               </div>
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
                 <p className="text-xs text-blue-800">
-                  <strong>Normal (Resting):</strong> 60-100 BPM • <strong>Athletes:</strong> 40-60 BPM • <strong>High:</strong> &gt;100 BPM
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* SpO2 */}
-          {activeTab === 'spo2' && (
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-bold text-gray-700 mb-2">Oxygen Saturation (SpO2)</label>
-                <div className="relative">
-                  <input
-                    type="number"
-                    value={spo2}
-                    onChange={(e) => setSpo2(e.target.value)}
-                    placeholder="98"
-                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none text-lg font-semibold"
-                  />
-                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">%</span>
-                </div>
-              </div>
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
-                <p className="text-xs text-blue-800">
-                  <strong>Normal:</strong> 95-100% • <strong>Mild Low:</strong> 90-94% • <strong>Severe:</strong> &lt;90% (Seek help!)
+                  <strong>Normal (Resting):</strong> 60-100 bpm • <strong>Elevated:</strong> &gt;100 bpm • <strong>Low:</strong> &lt;60 bpm
                 </p>
               </div>
             </div>

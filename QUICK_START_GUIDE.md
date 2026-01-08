@@ -12,7 +12,6 @@
 2. Search for **"SafeNest"**
 3. Tap **Install**
 4. Wait for download to complete
-5. Tap **Open**
 
 #### Step 2: Create Your Account
 1. App opens to welcome screen

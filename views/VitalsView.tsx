@@ -21,9 +21,74 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
   enteredBy = 'senior'
 }) => {
   const [showVitalsEntry, setShowVitalsEntry] = useState(false);
+  const [cooldownUntil, setCooldownUntil] = useState<Date | null>(null);
+  const [remainingTime, setRemainingTime] = useState<string>('');
+
+  // Check cooldown on mount and when vitalReadings changes
+  React.useEffect(() => {
+    const lastEntryStr = localStorage.getItem('vitalsLastCompletedEntry');
+    if (lastEntryStr) {
+      const lastEntry = new Date(lastEntryStr);
+      const cooldownEnd = new Date(lastEntry.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const now = new Date();
+      if (now < cooldownEnd) {
+        setCooldownUntil(cooldownEnd);
+      } else {
+        // Cooldown has expired
+        setCooldownUntil(null);
+        localStorage.removeItem('vitalsLastCompletedEntry');
+      }
+    }
+  }, [vitalReadings]);
+
+  // Update remaining time every minute
+  React.useEffect(() => {
+    if (!cooldownUntil) return;
+    
+    const updateTimer = () => {
+      const now = new Date();
+      const diff = cooldownUntil.getTime() - now.getTime();
+      
+      if (diff <= 0) {
+        setCooldownUntil(null);
+        setRemainingTime('');
+        localStorage.removeItem('vitalsLastCompletedEntry');
+        
+        // Clear today's vitals tracking when cooldown expires
+        const today = new Date().toDateString();
+        localStorage.removeItem(`vitals_entered_${today}`);
+        return;
+      }
+      
+      const days = Math.floor(diff / (24 * 60 * 60 * 1000));
+      const hours = Math.floor((diff % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+      const mins = Math.floor((diff % (60 * 60 * 1000)) / (60 * 1000));
+      
+      setRemainingTime(`${days}d ${hours}h ${mins}m`);
+    };
+    
+    updateTimer();
+    const interval = setInterval(updateTimer, 60000); // Update every minute
+    return () => clearInterval(interval);
+  }, [cooldownUntil]);
+
+  // Check if today is different from stored date, reset if needed
+  React.useEffect(() => {
+    const lastEntryStr = localStorage.getItem('vitalsLastCompletedEntry');
+    if (lastEntryStr) {
+      const lastEntry = new Date(lastEntryStr);
+      const lastEntryDate = lastEntry.toDateString();
+      const today = new Date().toDateString();
+      
+      // If it's a new day after cooldown expires, clear old tracking
+      if (lastEntryDate !== today) {
+        localStorage.removeItem(`vitals_entered_${lastEntryDate}`);
+      }
+    }
+  }, []);
 
   // Get latest manual vitals
-  const getLatestVital = (type: 'bloodPressure' | 'temperature' | 'weight' | 'bloodSugar' | 'heartRate' | 'spo2') => {
+  const getLatestVital = (type: 'bloodPressure' | 'temperature' | 'weight' | 'bloodSugar' | 'heartRate') => {
     const filtered = vitalReadings
       .filter(v => v.type === type && v.source === 'manual')
       .sort((a, b) => {
@@ -39,7 +104,6 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
   const latestWeight = getLatestVital('weight');
   const latestBG = getLatestVital('bloodSugar');
   const latestHR = getLatestVital('heartRate');
-  const latestSpO2 = getLatestVital('spo2');
 
   const formatTimestamp = (timestamp: Date | string) => {
     const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
@@ -58,6 +122,24 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
     if (onAddVital) {
       onAddVital(vital);
     }
+    
+    // Store entry in localStorage for immediate tracking (don't wait for parent state)
+    const today = new Date().toDateString();
+    const storedKey = `vitals_entered_${today}`;
+    const storedEntered = JSON.parse(localStorage.getItem(storedKey) || '[]') as string[];
+    if (!storedEntered.includes(vital.type)) {
+      storedEntered.push(vital.type);
+    }
+    localStorage.setItem(storedKey, JSON.stringify(storedEntered));
+    
+    // Check if all 5 vitals are now entered today
+    if (storedEntered.length === 5) {
+      const now = new Date();
+      localStorage.setItem('vitalsLastCompletedEntry', now.toISOString());
+      const cooldownEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      setCooldownUntil(cooldownEnd);
+    }
+    
     setShowVitalsEntry(false);
   };
 
@@ -451,11 +533,29 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
           <RefreshCw size={20} /> Refresh Data
       </button>
 
+      {/* Cooldown Message */}
+      {cooldownUntil && (
+        <div className="fixed bottom-32 left-4 right-4 bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 shadow-lg z-30">
+          <div className="flex items-start gap-3">
+            <div className="text-2xl mt-0.5">⏱️</div>
+            <div>
+              <p className="font-bold text-amber-900">You've completed all 5 vitals!</p>
+              <p className="text-sm text-amber-700 mt-1">Come back in <span className="font-bold">{remainingTime}</span> to log again.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Add Vitals Button (Floating) */}
       {onAddVital && (
         <button
           onClick={() => setShowVitalsEntry(true)}
-          className="fixed bottom-24 right-6 w-14 h-14 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full shadow-lg shadow-blue-300 flex items-center justify-center text-white transition-all active:scale-95 hover:shadow-xl z-40"
+          disabled={!!cooldownUntil}
+          className={`fixed bottom-24 right-6 w-14 h-14 rounded-full shadow-lg flex items-center justify-center text-white transition-all active:scale-95 z-40 ${
+            cooldownUntil
+              ? 'bg-gray-300 opacity-50 cursor-not-allowed'
+              : 'bg-gradient-to-br from-blue-500 to-blue-600 shadow-blue-300 hover:shadow-xl'
+          }`}
           aria-label="Add Vitals"
         >
           <Plus size={28} strokeWidth={2.5} />

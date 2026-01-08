@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Heart, Activity, MapPin, Zap, LogOut, Mic, Pill, AlertCircle, Droplets } from 'lucide-react';
-import { SeniorStatus, UserProfile, Medicine, MedicineLog, DoctorAppointment } from '../types';
+import { Heart, Activity, MapPin, Zap, LogOut, Mic, Pill, AlertCircle, Plus, Thermometer, Gauge } from 'lucide-react';
+import { SeniorStatus, UserProfile, Medicine, MedicineLog, VitalReading } from '../types';
 import { MedicineReminders } from './MedicineReminders';
+import { ManualVitalsEntry } from './ManualVitalsEntry';
 import { useLanguage } from '../i18n/LanguageContext';
 
 declare var L: any;
@@ -23,11 +24,8 @@ interface SeniorHomeProps {
   medicineLogs?: MedicineLog[];
   onMarkTaken?: (medicineId: string, scheduledTime: string) => void;
   onSkipMedicine?: (medicineId: string, scheduledTime: string) => void;
-  onSnoozeMedicine?: (medicineId: string, scheduledTime: string, snoozeUntil: string) => void;
-  // Water tracker
-  onOpenWaterTracker?: () => void;
-  // Upcoming appointments (read-only)
-  upcomingAppointments?: DoctorAppointment[];
+  vitalReadings?: VitalReading[];
+  onAddVital?: (vital: Omit<VitalReading, 'id' | 'timestamp'>) => void;
 }
 
 export const SeniorHome: React.FC<SeniorHomeProps> = ({ 
@@ -47,15 +45,148 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
   medicineLogs = [],
   onMarkTaken,
   onSkipMedicine,
-  onSnoozeMedicine,
-  onOpenWaterTracker,
-  upcomingAppointments = []
+  vitalReadings = [],
+  onAddVital
 }) => {
   const { t } = useLanguage();
+  const [showVitalsEntry, setShowVitalsEntry] = useState(false);
+  const [nextVitalsAvailable, setNextVitalsAvailable] = useState<Date | null>(null);
+  const [isVitalsLocked, setIsVitalsLocked] = useState(false);
+  
+  // Get latest vital reading of a specific type
+  const getLatestVital = (type: 'bloodPressure' | 'temperature' | 'weight' | 'heartRate') => {
+    const filtered = vitalReadings
+      .filter(v => v.type === type && v.source === 'manual')
+      .sort((a, b) => {
+        const dateA = a.timestamp instanceof Date ? a.timestamp : new Date(a.timestamp);
+        const dateB = b.timestamp instanceof Date ? b.timestamp : new Date(b.timestamp);
+        return dateB.getTime() - dateA.getTime();
+      });
+    return filtered[0];
+  };
+
+  const latestBP = getLatestVital('bloodPressure');
+  const latestTemp = getLatestVital('temperature');
+  const latestWeight = getLatestVital('weight');
+  const latestHR = getLatestVital('heartRate');
+
+  const formatTimestamp = (timestamp: Date | string) => {
+    const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins} mins ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    return date.toLocaleDateString();
+  };
+
+  const checkVitalsLockStatus = () => {
+    const nextAvailable = localStorage.getItem('nextVitalsAvailable');
+    
+    if (nextAvailable) {
+      const nextDate = new Date(nextAvailable);
+      const now = new Date();
+      
+      if (now < nextDate) {
+        setNextVitalsAvailable(nextDate);
+        setIsVitalsLocked(true);
+      } else {
+        // Clear all lock-related data when 7 days have passed
+        localStorage.removeItem('lastVitalEntry');
+        localStorage.removeItem('nextVitalsAvailable');
+        localStorage.removeItem('vitalEntryTracker');
+        setNextVitalsAvailable(null);
+        setIsVitalsLocked(false);
+      }
+    }
+  };
+
+  const checkAllFourVitalsEntered = () => {
+    const tracker = localStorage.getItem('vitalEntryTracker');
+    
+    if (!tracker) return false;
+    
+    try {
+      const enteredVitals = JSON.parse(tracker);
+      const hasAllFour = 
+        enteredVitals.bloodPressure && 
+        enteredVitals.temperature && 
+        enteredVitals.weight && 
+        enteredVitals.heartRate;
+      
+      return hasAllFour;
+    } catch {
+      return false;
+    }
+  };
+
+  const scheduleVitalsNotification = (availableDate: Date) => {
+    const now = new Date();
+    const timeUntilAvailable = availableDate.getTime() - now.getTime();
+    
+    if (timeUntilAvailable > 0 && 'Notification' in window && Notification.permission === 'granted') {
+      setTimeout(() => {
+        new Notification('Vitals Entry Available', {
+          body: 'You can now enter your vital readings again!',
+          tag: 'vitals-available',
+          icon: '❤️'
+        });
+      }, timeUntilAvailable);
+    }
+  };
+
+  const handleSaveVital = (vital: Omit<VitalReading, 'id' | 'timestamp'>) => {
+    if (onAddVital) {
+      onAddVital(vital);
+      
+      // Track which vitals have been entered
+      const tracker = JSON.parse(localStorage.getItem('vitalEntryTracker') || '{}');
+      tracker[vital.type] = new Date().toISOString();
+      localStorage.setItem('vitalEntryTracker', JSON.stringify(tracker));
+      
+      // Check if all 4 vitals have been entered
+      const allEntered = 
+        tracker.bloodPressure && 
+        tracker.temperature && 
+        tracker.weight && 
+        tracker.heartRate;
+      
+      if (allEntered) {
+        // All 4 entered, now lock for 7 days
+        const now = new Date();
+        const nextAvailable = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+        
+        localStorage.setItem('lastVitalEntry', now.toISOString());
+        localStorage.setItem('nextVitalsAvailable', nextAvailable.toISOString());
+        
+        setNextVitalsAvailable(nextAvailable);
+        setIsVitalsLocked(true);
+        
+        scheduleVitalsNotification(nextAvailable);
+      }
+    }
+    setShowVitalsEntry(false);
+  };
   
   useEffect(() => {
     console.log('[SeniorHome] onSignOut:', typeof onSignOut);
   }, [onSignOut]);
+
+  // Check vitals lock status on mount and when vitalReadings change
+  useEffect(() => {
+    checkVitalsLockStatus();
+  }, [vitalReadings]);
+
+  // Check vitals lock status periodically (every minute)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      checkVitalsLockStatus();
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
 
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -211,66 +342,109 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
 
       {/* Vitals */}
       <div>
-        <div className="flex items-center gap-2 mb-3">
-          <Activity size={20} className="text-blue-600" />
-          <h2 className="text-lg font-semibold text-gray-900">{t.myVitals}</h2>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <Activity size={20} className="text-blue-600" />
+            <h2 className="text-lg font-semibold text-gray-900">{t.myVitals}</h2>
+          </div>
+          {onAddVital && (
+            <button
+              onClick={() => setShowVitalsEntry(true)}
+              disabled={isVitalsLocked}
+              className={`flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full border transition-colors ${
+                isVitalsLocked
+                  ? 'text-gray-400 bg-gray-50 border-gray-200 cursor-not-allowed opacity-60'
+                  : 'text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 border-blue-200'
+              }`}
+              title={isVitalsLocked ? 'Vitals locked. Next entry available in 7 days.' : 'Add vital reading'}
+            >
+              <Plus size={14} />
+              <span>Add</span>
+            </button>
+          )}
         </div>
+        {isVitalsLocked && nextVitalsAvailable && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 flex items-start gap-3">
+            <AlertCircle size={18} className="text-amber-600 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-amber-900">Next Entry Available</p>
+              <p className="text-xs text-amber-700 mt-1">
+                {nextVitalsAvailable.toLocaleDateString('en-US', { 
+                  month: 'short', 
+                  day: 'numeric', 
+                  year: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit'
+                })}
+              </p>
+              <p className="text-xs text-amber-600 mt-1">You can re-enter vitals on this date</p>
+            </div>
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-4">
+        </div>
+
+        {/* Manual Vital Readings */}
+        <div className="mt-4 space-y-4">
+          {/* Blood Pressure Card */}
+          {latestBP && (
+            <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+              <div className="flex justify-between items-start mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-orange-50 rounded-full flex items-center justify-center">
+                    <Gauge className="text-orange-500" size={20} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-gray-900">Blood Pressure</h3>
+                    <p className="text-gray-500 text-xs">{formatTimestamp(latestBP.timestamp)}</p>
+                  </div>
+                </div>
+                <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                  (latestBP.value as { systolic: number }).systolic > 140 
+                    ? 'bg-red-100 text-red-700' 
+                    : 'bg-green-100 text-green-700'
+                }`}>
+                  {(latestBP.value as { systolic: number }).systolic > 140 ? 'Elevated' : 'Normal'}
+                </span>
+              </div>
+              <div className="flex items-end gap-1">
+                <span className="text-4xl font-bold text-gray-900">
+                  {`${(latestBP.value as { systolic: number; diastolic: number }).systolic}/${(latestBP.value as { systolic: number; diastolic: number }).diastolic}`}
+                </span>
+                <span className="text-gray-500 font-semibold mb-1">mmHg</span>
+              </div>
+              {latestBP.notes && <p className="text-xs text-gray-600 mt-2">{latestBP.notes}</p>}
+            </div>
+          )}
+
           {/* Heart Rate Card */}
-          <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-between h-32">
-            <div className="flex justify-between items-start mb-2">
-              <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center">
-                <Heart size={20} className="text-red-500" fill="currentColor" />
-              </div>
-              {isFitConnected && status.heartRate && (
-                <span className="text-[10px] font-semibold text-green-600 uppercase bg-green-50 px-2 py-0.5 rounded-full">{t.normal}</span>
-              )}
-            </div>
-            <div>
-              {isFitConnected ? (
-                <>
-                  <div className="flex items-end gap-1">
-                    <span className="text-4xl font-bold text-gray-900">{status.heartRate ?? '--'}</span>
-                    <span className="text-sm font-medium text-gray-500 mb-1">{t.bpm}</span>
+          {latestHR && (
+            <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+              <div className="flex justify-between items-start mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-red-50 rounded-full flex items-center justify-center">
+                    <Heart className="text-red-500" size={20} fill="currentColor" />
                   </div>
-                  <p className="text-xs font-medium text-gray-400 mt-1">Heart Rate</p>
-                </>
-              ) : (
-                <div className="text-center py-2">
-                  <div className="text-2xl font-bold text-gray-300 mb-1">--</div>
-                  <p className="text-[10px] font-semibold text-gray-400">Connect smartwatch</p>
-                </div>
-              )}
-            </div>
-          </div>
-          
-          {/* SpO2 Card */}
-          <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-between h-32">
-            <div className="flex justify-between items-start mb-2">
-              <div className="w-10 h-10 rounded-full bg-blue-50 flex items-center justify-center">
-                <div className="text-blue-500 font-bold text-lg">O₂</div>
-              </div>
-              {isFitConnected && status.spo2 && (
-                <span className="text-[10px] font-semibold text-green-600 uppercase bg-green-50 px-2 py-0.5 rounded-full">{t.good}</span>
-              )}
-            </div>
-            <div>
-              {isFitConnected ? (
-                <>
-                  <div className="flex items-end gap-1">
-                    <span className="text-4xl font-bold text-gray-900">{status.spo2 ?? '--'}</span>
-                    <span className="text-sm font-medium text-gray-500 mb-1">%</span>
+                  <div>
+                    <h3 className="font-bold text-gray-900">Heart Rate (Manual)</h3>
+                    <p className="text-gray-500 text-xs">{formatTimestamp(latestHR.timestamp)}</p>
                   </div>
-                  <p className="text-xs font-medium text-gray-400 mt-1">Blood Oxygen</p>
-                </>
-              ) : (
-                <div className="text-center py-2">
-                  <div className="text-2xl font-bold text-gray-300 mb-1">--</div>
-                  <p className="text-[10px] font-semibold text-gray-400">Connect smartwatch</p>
                 </div>
-              )}
+                <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                  (latestHR.value as number) < 60 || (latestHR.value as number) > 100
+                    ? 'bg-yellow-100 text-yellow-700'
+                    : 'bg-green-100 text-green-700'
+                }`}>
+                  {(latestHR.value as number) < 60 || (latestHR.value as number) > 100 ? 'Abnormal' : 'Normal'}
+                </span>
+              </div>
+              <div className="flex items-end gap-1">
+                <span className="text-4xl font-bold text-gray-900">{Math.round(latestHR.value as number)}</span>
+                <span className="text-gray-500 font-semibold mb-1">bpm</span>
+              </div>
+              {latestHR.notes && <p className="text-xs text-gray-600 mt-2">{latestHR.notes}</p>}
             </div>
-          </div>
+          )}
         </div>
       </div>
 
@@ -364,61 +538,6 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
         </div>
       </div>
 
-      {/* Upcoming Appointments (Read-only for Senior) */}
-      {upcomingAppointments.length > 0 && (
-        <div className="mt-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-3">📅 {t.upcomingAppointments}</h2>
-          <div className="space-y-2">
-            {upcomingAppointments.slice(0, 3).map((apt) => {
-              const aptDate = apt.date instanceof Date ? apt.date : new Date(apt.date);
-              const isToday = aptDate.toDateString() === new Date().toDateString();
-              const isTomorrow = aptDate.toDateString() === new Date(Date.now() + 86400000).toDateString();
-              
-              return (
-                <div key={apt.id} className={`bg-white rounded-xl p-4 shadow-sm border ${isToday ? 'border-red-200 bg-red-50' : 'border-gray-100'}`}>
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <p className="font-bold text-gray-900">{apt.doctorName}</p>
-                      <p className="text-sm text-gray-500">{apt.specialty}</p>
-                    </div>
-                    <div className="text-right">
-                      <p className={`font-semibold ${isToday ? 'text-red-600' : 'text-blue-600'}`}>
-                        {isToday ? t.today : isTomorrow ? t.tomorrow : aptDate.toLocaleDateString()}
-                      </p>
-                      <p className="text-sm text-gray-600">{apt.time}</p>
-                    </div>
-                  </div>
-                  {apt.address && (
-                    <p className="text-xs text-gray-400 mt-2">📍 {apt.address}</p>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Water Intake Quick Log */}
-      {onOpenWaterTracker && (
-        <div className="mt-6">
-          <button
-            onClick={onOpenWaterTracker}
-            className="w-full bg-gradient-to-r from-blue-500 to-cyan-500 rounded-2xl p-4 shadow-lg flex items-center justify-between active:scale-98 transition-transform"
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-12 h-12 rounded-full bg-white/20 flex items-center justify-center">
-                <Droplets size={24} className="text-white" />
-              </div>
-              <div className="text-left">
-                <p className="text-white font-bold text-lg">{t.logWaterIntake}</p>
-                <p className="text-white/80 text-sm">{t.stayHydrated}</p>
-              </div>
-            </div>
-            <div className="text-white/90 text-2xl">💧</div>
-          </button>
-        </div>
-      )}
-
       {/* Medicine Reminder Card - Direct Actions */}
       {medicines.length > 0 && (
         <div className="mt-6">
@@ -427,9 +546,17 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
             medicineLogs={medicineLogs || []}
             onMarkTaken={onMarkTaken || (() => {})}
             onSkip={onSkipMedicine || (() => {})}
-            onSnooze={onSnoozeMedicine}
           />
         </div>
+      )}
+
+      {/* Manual Vitals Entry Modal */}
+      {showVitalsEntry && onAddVital && (
+        <ManualVitalsEntry
+          onSave={handleSaveVital}
+          onClose={() => setShowVitalsEntry(false)}
+          enteredBy="senior"
+        />
       )}
     </div>
   );
