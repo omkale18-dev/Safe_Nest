@@ -3,7 +3,6 @@ import { TrendingUp, AlertCircle, CheckCircle, Activity, AlertTriangle, Heart, D
 import { Medicine, MedicineLog, VitalReading } from '../types';
 import { analyzeHealthData } from '../services/healthPredictions';
 import { VitalsChart } from '../components/VitalsChart';
-import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 
 interface ComplianceAnalyticsProps {
   medicines: Medicine[];
@@ -12,9 +11,9 @@ interface ComplianceAnalyticsProps {
 }
 
 export const ComplianceAnalytics: React.FC<ComplianceAnalyticsProps> = ({
-  medicines,
-  medicineLogs,
-  vitalReadings,
+  medicines = [],
+  medicineLogs = [],
+  vitalReadings = [],
 }) => {
   const [chartPeriod, setChartPeriod] = useState<7 | 30>(7);
   const [showAnalysis, setShowAnalysis] = useState(false);
@@ -590,45 +589,54 @@ export const ComplianceAnalytics: React.FC<ComplianceAnalyticsProps> = ({
       const blob = new Blob([content], { type: 'text/html' });
       const fileName = `SafeNest_Health_Report_${new Date().toISOString().split('T')[0]}.html`;
       
-      // Try to save to device file manager (Android/iOS)
-      try {
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-          const base64 = (e.target?.result as string).split(',')[1];
-          try {
-            const result = await Filesystem.writeFile({
-              path: fileName,
-              data: base64,
-              directory: Directory.Documents,
-              encoding: Encoding.UTF8,
-            });
-            console.log('✅ Report saved to:', result.uri);
-            alert(`✅ Report saved to Documents folder!\nFile: ${fileName}`);
-          } catch (saveError) {
-            console.warn('Could not save to Documents, trying cache:', saveError);
-            // Fallback: save to cache directory
-            try {
-              const cacheResult = await Filesystem.writeFile({
-                path: fileName,
-                data: base64,
-                directory: Directory.Cache,
-                encoding: Encoding.UTF8,
-              });
-              console.log('✅ Report saved to cache:', cacheResult.uri);
-              alert(`✅ Report saved!\nFile: ${fileName}`);
-            } catch (cacheError) {
-              console.error('Failed to save to cache too:', cacheError);
-              // Last resort: download as blob in browser
-              downloadAsBlob(blob, fileName);
-            }
+      // Try to save to device file manager (Android/iOS) if Capacitor is available
+      const saveToDevice = async () => {
+        try {
+          // Check if we're in a Capacitor environment
+          if (typeof (window as any).Capacitor !== 'undefined') {
+            const { Filesystem, Directory } = (window as any).Capacitor.Plugins;
+            const reader = new FileReader();
+            reader.onload = async (e) => {
+              const base64 = (e.target?.result as string).split(',')[1];
+              try {
+                const result = await Filesystem.writeFile({
+                  path: fileName,
+                  data: base64,
+                  directory: Directory.Documents,
+                  encoding: 'utf8',
+                });
+                console.log('✅ Report saved to:', result.uri);
+                alert(`✅ Report saved to Documents folder!\nFile: ${fileName}`);
+              } catch (saveError) {
+                console.warn('Could not save to Documents, trying cache:', saveError);
+                // Fallback: save to cache directory
+                try {
+                  const cacheResult = await Filesystem.writeFile({
+                    path: fileName,
+                    data: base64,
+                    directory: Directory.Cache,
+                    encoding: 'utf8',
+                  });
+                  console.log('✅ Report saved to cache:', cacheResult.uri);
+                  alert(`✅ Report saved!\nFile: ${fileName}`);
+                } catch (cacheError) {
+                  console.error('Failed to save to cache too:', cacheError);
+                  // Last resort: download as blob in browser
+                  downloadAsBlob(blob, fileName);
+                }
+              }
+            };
+            reader.readAsDataURL(blob);
+          } else {
+            downloadAsBlob(blob, fileName);
           }
-        };
-        reader.readAsDataURL(blob);
-      } catch (e) {
-        console.warn('Filesystem plugin not available, using browser download:', e);
-        // Fallback to browser download
-        downloadAsBlob(blob, fileName);
-      }
+        } catch (e) {
+          console.warn('Could not save to device, using browser download:', e);
+          downloadAsBlob(blob, fileName);
+        }
+      };
+      
+      await saveToDevice();
 
       // Also offer to print as PDF (for web/browser)
       const printWindow = window.open('', '_blank');
@@ -728,7 +736,21 @@ export const ComplianceAnalytics: React.FC<ComplianceAnalyticsProps> = ({
 
   // Health analysis (NEW)
   const healthAnalysis = useMemo(() => {
-    return analyzeHealthData(vitalReadings, medicineLogs);
+    try {
+      return analyzeHealthData(vitalReadings || [], medicineLogs || []);
+    } catch (error) {
+      console.error('Error analyzing health data:', error);
+      return {
+        predictions: [],
+        riskScore: {
+          overall: 0,
+          cardiovascular: 0,
+          metabolic: 0,
+          compliance: 0,
+          trend: 'stable' as const,
+        }
+      };
+    }
   }, [vitalReadings, medicineLogs]);
 
   // Filter vital readings by type

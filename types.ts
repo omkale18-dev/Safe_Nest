@@ -25,6 +25,8 @@ export interface UserProfile {
   role: UserRole;
   avatar: string;
   phone: string;
+  deviceName?: string; // Device name where senior is logged in
+  lastActiveDevice?: string; // Last device that was active
 }
 
 export interface ActivityItem {
@@ -93,6 +95,8 @@ export interface HouseholdMember {
   avatar: string;
   phone: string;
   joinedAt: string;
+  deviceName?: string; // Device name where senior is logged in
+  lastActiveDevice?: string; // Last device that was active
 }
 
 // ===== MEDICINE MANAGEMENT =====

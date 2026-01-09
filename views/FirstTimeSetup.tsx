@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { UserRole, UserProfile } from '../types';
 import { User, Phone, Camera, AlertCircle } from 'lucide-react';
-import { sanitizeForLog, sanitizeForHTML } from '../utils/sanitize';
+import { sanitizeForLog, sanitizeForHTML, getDeviceName } from '../utils/sanitize';
 
 interface FirstTimeSetupProps {
   onComplete: (profile: UserProfile, role: UserRole) => void;
@@ -112,12 +112,15 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({ onComplete, onRe
     }
 
     // Phone is validated or not provided, proceed
+    const deviceName = getDeviceName();
     const profile: UserProfile = {
       id: existingProfileId || `u${Date.now()}`, // Use existing ID if loading existing caregiver
       name: name.trim(),
       role: selectedRole!,
       phone: phone.trim() || 'Not provided',
-      avatar
+      avatar,
+      deviceName: selectedRole === UserRole.SENIOR ? deviceName : undefined,
+      lastActiveDevice: deviceName
     };
 
     if (isRejoinFlow && onRejoinWithCode) {
@@ -153,24 +156,14 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({ onComplete, onRe
         }
       }
 
-      // If senior, check if senior exists in household - auto rejoin without profile step
+      // If senior, check if senior exists in household - block multiple devices
       if (selectedRole === UserRole.SENIOR && onCheckExistingMember) {
         const existingProfile = await onCheckExistingMember(cleanCode, '');
         if (existingProfile && existingProfile.role === UserRole.SENIOR) {
-          const profile = {
-            id: existingProfile.id || '',
-            name: existingProfile.name,
-            phone: existingProfile.phone,
-            avatar: existingProfile.avatar,
-            role: UserRole.SENIOR,
-          };
-
-          // Directly rejoin using existing profile (no profile creation screen)
-          if (onRejoinWithCode) {
-            await onRejoinWithCode(cleanCode, profile, selectedRole);
-            setLocalValidating(false);
-            return;
-          }
+          // Senior already exists - block joining from another device
+          setLocalError('This household already has a senior connected. Only one device per senior is allowed. Please use your original device or contact your caregiver to reset access.');
+          setLocalValidating(false);
+          return;
         }
       }
 

@@ -269,6 +269,18 @@ public class MedicineReminderReceiver extends BroadcastReceiver {
             PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
         );
         
+        // Action: Skip
+        Intent skipIntent = new Intent(context, MedicineActionReceiver.class);
+        skipIntent.setAction("ACTION_SKIP");
+        skipIntent.putExtra(EXTRA_MEDICINE_ID, medicineId);
+        skipIntent.putExtra(EXTRA_SCHEDULED_TIME, scheduledTime);
+        PendingIntent skipPendingIntent = PendingIntent.getBroadcast(
+            context,
+            ("skip_" + medicineId + scheduledTime).hashCode(),
+            skipIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+        );
+        
         // Build notification
         String channel = isCritical ? CHANNEL_CRITICAL : CHANNEL_MEDICINE;
         String title = isCritical ? "🔴 CRITICAL: " + medicineName : "💊 " + medicineName;
@@ -292,10 +304,12 @@ public class MedicineReminderReceiver extends BroadcastReceiver {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setAutoCancel(true)
             .setContentIntent(openPendingIntent)
-            .addAction(0, "✓ Taken", takenPendingIntent)
-            .addAction(0, "⏰ Snooze 15m", snoozePendingIntent)
+            .addAction(android.R.drawable.ic_menu_view, "✓ Taken", takenPendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "✗ Skip", skipPendingIntent)
             .setSound(soundUri)
-            .setDefaults(NotificationCompat.DEFAULT_LIGHTS);
+            .setDefaults(NotificationCompat.DEFAULT_LIGHTS)
+            .setOngoing(false)
+            .setShowWhen(true);
         
         if (isCritical) {
             builder.setFullScreenIntent(openPendingIntent, true);
@@ -305,7 +319,13 @@ public class MedicineReminderReceiver extends BroadcastReceiver {
         int notificationId = (medicineId + scheduledTime).hashCode();
         manager.notify(notificationId, builder.build());
         
-        Log.d(TAG, "Notification shown for: " + medicineName + " at " + scheduledTime);
+        Log.d(TAG, "========== Notification Displayed ==========");
+        Log.d(TAG, "Medicine: " + medicineName + " at " + scheduledTime);
+        Log.d(TAG, "Critical: " + isCritical);
+        Log.d(TAG, "Channel: " + channel);
+        Log.d(TAG, "Notification ID: " + notificationId);
+        Log.d(TAG, "Actions: ✓ Taken, ✗ Skip");
+        Log.d(TAG, "==========================================");
     }
     
     private void vibrateDevice(Context context, boolean isCritical) {

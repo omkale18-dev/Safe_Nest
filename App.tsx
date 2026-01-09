@@ -35,11 +35,8 @@ import {
   registerLockScreenSOSHandler,
   cleanupEmergencyShortcuts 
 } from './services/emergencyShortcuts';
-import { sanitizeForLog } from './utils/sanitize';
+import { sanitizeForLog, getDeviceName } from './utils/sanitize';
 import * as googleFitService from './services/googleFit';
-import { isOnline } from './services/network';
-import { offlineStore } from './services/offlineStore';
-import { backgroundReminders } from './services/backgroundReminders';
 
 const normalizePhone = (value: string) => value ? value.replace(/\D/g, '') : '';
 
@@ -304,6 +301,7 @@ const App = () => {
   const [isValidatingHousehold, setIsValidatingHousehold] = useState(false);
   const [isAppInForeground, setIsAppInForeground] = useState(true);
   const [isJoiningAnother, setIsJoiningAnother] = useState(false); // Track if joining another household from caregiver dashboard
+  const [showAlarmPermissionWarning, setShowAlarmPermissionWarning] = useState(false);
   const fallCountdownTimerRef = useRef<any>(null);
   const voiceDetectorRef = useRef<VoiceEmergencyDetector | null>(null);
   const [isVoiceEmergencyEnabled, setIsVoiceEmergencyEnabled] = useState(false);
@@ -508,7 +506,9 @@ const App = () => {
               name: seniorMember.name,
               role: seniorMember.role,
               avatar: seniorMember.avatar,
-              phone: seniorMember.phone
+              phone: seniorMember.phone,
+              deviceName: seniorMember.deviceName,
+              lastActiveDevice: seniorMember.lastActiveDevice
             };
           }
         } else {
@@ -522,7 +522,9 @@ const App = () => {
               name: existingMember.name,
               role: existingMember.role,
               avatar: existingMember.avatar,
-              phone: existingMember.phone
+              phone: existingMember.phone,
+              deviceName: existingMember.deviceName,
+              lastActiveDevice: existingMember.lastActiveDevice
             };
           }
         }
@@ -1655,21 +1657,25 @@ const App = () => {
     if (!householdId || !role) return;
     const registerMember = async () => {
       try {
+        const deviceName = getDeviceName();
         const memberData: HouseholdMember = {
           id: currentUser.id || `user-${Date.now()}`,
           name: currentUser.name,
           role,
           avatar: currentUser.avatar,
           phone: currentUser.phone,
-          joinedAt: new Date().toISOString()
+          joinedAt: new Date().toISOString(),
+          deviceName: role === UserRole.SENIOR ? deviceName : undefined,
+          lastActiveDevice: deviceName
         };
         await set(ref(db, `households/${householdId}/members/${memberData.id}`), memberData);
+        console.log('[Firebase] Member registered with device:', deviceName);
       } catch (e) {
         console.error('[Firebase] Failed to register member', e);
       }
     };
     registerMember();
-  }, [householdId, role, currentUser]);
+  }, [householdId, role, currentUser.id, currentUser.name, currentUser.avatar, currentUser.phone]);
 
   // Subscribe to household members
   useEffect(() => {
@@ -1732,8 +1738,8 @@ const App = () => {
           ...med,
           startDate: med.startDate ? new Date(med.startDate) : new Date(),
           endDate: med.endDate ? new Date(med.endDate) : undefined,
-          createdAt: med.createdAt ? new Date(med.createdAt) : new Date(),
-          updatedAt: med.updatedAt ? new Date(med.updatedAt) : new Date(),
+          createdAt: new Date(med.createdAt),
+          updatedAt: new Date(med.updatedAt),
         })) as Medicine[];
         setMedicines(medicinesList);
       } else {
@@ -1742,6 +1748,131 @@ const App = () => {
     });
     return () => unsub();
   }, [householdId]);
+
+  // Schedule/reschedule background medicine reminders whenever medicines change
+  useEffect(() => {
+    if (!backgroundReminders.isAvailable() || medicines.length === 0) return;
+    
+    const scheduleReminders = async () => {
+      // Check alarm permission first
+      const canSchedule = await backgroundReminders.canScheduleExactAlarms();
+      console.log('[App] Can schedule exact alarms:', canSchedule);
+      
+      if (!canSchedule && role === UserRole.SENIOR) {
+        setShowAlarmPermissionWarning(true);
+        console.warn('[App] ⚠️ Exact alarm permission not granted - reminders may not work reliably');
+      }
+      
+      console.log('[App] Scheduling background reminders for', medicines.length, 'medicines');
+      
+      for (const medicine of medicines) {
+        try {
+          console.log(`[App] Scheduling ${medicine.name} with times:`, medicine.times);
+          const success = await backgroundReminders.scheduleMedicine(medicine);
+          console.log(`[App] ${success ? '✓' : '✗'} ${medicine.name}:`, success ? 'scheduled' : 'failed');
+        } catch (error) {
+          console.error('[App] Error scheduling reminders for', medicine.name, ':', error);
+        }
+      }
+      
+      // Verify what's scheduled
+      try {
+        const scheduled = await backgroundReminders.getScheduledReminders();
+        console.log('[App] Total scheduled reminders:', scheduled);
+      } catch (error) {
+        console.error('[App] Error getting scheduled reminders:', error);
+      }
+    };
+    
+    scheduleReminders();
+  }, [medicines, role]);
+
+  // Sync pending medicine actions from notification buttons
+  useEffect(() => {
+    if (!householdId || !backgroundReminders.isAvailable()) return;
+    
+    const syncPendingActions = async () => {
+      try {
+        console.log('[App] Checking for pending medicine actions...');
+        const pending = await backgroundReminders.getPendingActions();
+        
+        if (pending && pending.length > 0) {
+          console.log('[App] Found', pending.length, 'pending actions to sync');
+          
+          for (const action of pending) {
+            const { medicineId, scheduledTime, status, timestamp, date } = action;
+            
+            console.log('[App] Syncing action:', status, 'for', medicineId, 'at', scheduledTime);
+            
+            // Find the medicine
+            const medicine = medicines.find(m => m.id === medicineId);
+            if (!medicine) {
+              console.warn('[App] Medicine not found:', medicineId);
+              continue;
+            }
+            
+            // Create medicine log entry
+            if (status === 'TAKEN') {
+              const logId = `${medicineId}_${date}_${scheduledTime}`.replace(/:/g, '-');
+              const logEntry: MedicineLog = {
+                id: logId,
+                medicineId: medicineId,
+                medicineName: medicine.name,
+                dosage: medicine.dosage,
+                scheduledTime: scheduledTime,
+                takenTime: new Date(timestamp).toISOString(),
+                date: new Date(date),
+                status: 'TAKEN',
+                takenBy: 'senior',
+                notes: 'Marked from notification'
+              };
+              
+              await set(ref(db, `households/${householdId}/medicineLogs/${logId}`), {
+                ...logEntry,
+                date: logEntry.date.toISOString(),
+              });
+              
+              console.log('[App] ✓ Synced TAKEN action for', medicine.name);
+            } else if (status === 'SKIPPED') {
+              const logId = `${medicineId}_${date}_${scheduledTime}`.replace(/:/g, '-');
+              const logEntry: MedicineLog = {
+                id: logId,
+                medicineId: medicineId,
+                medicineName: medicine.name,
+                dosage: medicine.dosage,
+                scheduledTime: scheduledTime,
+                takenTime: new Date(timestamp).toISOString(),
+                date: new Date(date),
+                status: 'SKIPPED',
+                takenBy: 'senior',
+                notes: 'Skipped from notification'
+              };
+              
+              await set(ref(db, `households/${householdId}/medicineLogs/${logId}`), {
+                ...logEntry,
+                date: logEntry.date.toISOString(),
+              });
+              
+              console.log('[App] ✓ Synced SKIPPED action for', medicine.name);
+            }
+          }
+          
+          // Clear pending actions after sync
+          await backgroundReminders.clearPendingActions();
+          console.log('[App] ✓ All pending actions synced and cleared');
+        }
+      } catch (error) {
+        console.error('[App] Error syncing pending actions:', error);
+      }
+    };
+    
+    // Sync on mount and when medicines change
+    syncPendingActions();
+    
+    // Also sync periodically every 30 seconds while app is open
+    const interval = setInterval(syncPendingActions, 30000);
+    return () => clearInterval(interval);
+  }, [householdId, medicines]);
 
   // Subscribe to medicine logs
   useEffect(() => {
@@ -1963,13 +2094,7 @@ const App = () => {
   }, []);
 
   // Medicine handlers
-  const handleAddMedicine = async (medicine: Medicine) => {
-    const targetHouseholdId = role === UserRole.CAREGIVER ? (activeHouseholdId || householdId) : householdId;
-    if (!targetHouseholdId) {
-      console.error('[Medicine] No household selected, cannot add medicine');
-      return;
-    }
-
+  const handleAddMedicine = (medicine: Medicine) => {
     const medicineId = Date.now().toString();
     const newMedicine = { ...medicine, id: medicineId };
     // Remove undefined values for Firebase
@@ -1978,24 +2103,7 @@ const App = () => {
         delete newMedicine[key as keyof Medicine];
       }
     });
-    const serializedMedicine = {
-      ...newMedicine,
-      startDate: newMedicine.startDate ? new Date(newMedicine.startDate).toISOString() : new Date().toISOString(),
-      endDate: newMedicine.endDate ? new Date(newMedicine.endDate).toISOString() : undefined,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    await set(ref(db, `households/${targetHouseholdId}/medicines/${medicineId}`), serializedMedicine);
-    
-    // Schedule background reminders for this medicine
-    try {
-      const success = await backgroundReminders.scheduleMedicine(newMedicine);
-      if (success) {
-        console.log('[Medicine] Background reminders scheduled for:', newMedicine.name);
-      }
-    } catch (e) {
-      console.error('[Medicine] Failed to schedule background reminders:', e);
-    }
+    set(ref(db, `households/${householdId}/medicines/${medicineId}`), newMedicine);
   };
 
   const handleUpdateMedicine = async (medicine: Medicine) => {
@@ -2012,42 +2120,11 @@ const App = () => {
         delete cleanMedicine[key as keyof Medicine];
       }
     });
-    const serializedMedicine = {
-      ...cleanMedicine,
-      startDate: cleanMedicine.startDate ? new Date(cleanMedicine.startDate).toISOString() : new Date().toISOString(),
-      endDate: cleanMedicine.endDate ? new Date(cleanMedicine.endDate).toISOString() : undefined,
-      createdAt: cleanMedicine.createdAt ? new Date(cleanMedicine.createdAt).toISOString() : new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    await set(ref(db, `households/${targetHouseholdId}/medicines/${medicine.id}`), serializedMedicine);
-    
-    // Reschedule background reminders for updated medicine
-    try {
-      const success = await backgroundReminders.scheduleMedicine(cleanMedicine);
-      if (success) {
-        console.log('[Medicine] Background reminders rescheduled for:', cleanMedicine.name);
-      }
-    } catch (e) {
-      console.error('[Medicine] Failed to reschedule background reminders:', e);
-    }
+    set(ref(db, `households/${householdId}/medicines/${medicine.id}`), cleanMedicine);
   };
 
-  const handleDeleteMedicine = async (medicineId: string) => {
-    const targetHouseholdId = role === UserRole.CAREGIVER ? (activeHouseholdId || householdId) : householdId;
-    if (!targetHouseholdId) {
-      console.error('[Medicine] No household selected, cannot delete medicine');
-      return;
-    }
-
-    await set(ref(db, `households/${targetHouseholdId}/medicines/${medicineId}`), null);
-    
-    // Cancel background reminders for deleted medicine
-    try {
-      await backgroundReminders.cancelMedicine(medicineId);
-      console.log('[Medicine] Background reminders cancelled for:', medicineId);
-    } catch (e) {
-      console.error('[Medicine] Failed to cancel background reminders:', e);
-    }
+  const handleDeleteMedicine = (medicineId: string) => {
+    set(ref(db, `households/${householdId}/medicines/${medicineId}`), null);
   };
 
   const handleMarkTaken = (medicineId: string, scheduledTime: string) => {
@@ -2490,6 +2567,7 @@ const App = () => {
           vitalReadings={vitalReadings}
           onAddVital={handleAddVital}
           enteredBy="senior"
+          householdId={householdId}
           onRefresh={async () => {
             try {
               const ok = await googleFitService.hasPermissions();
