@@ -263,6 +263,87 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSignOut, onJoinAno
                         </div>
                 </section>
 
+        {/* Medicine Alarm Debug */}
+        <section>
+          <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3 px-1">MEDICINE ALARMS DEBUG</h2>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden p-4 space-y-2">
+            <button
+              onClick={async () => {
+                if (!backgroundReminders.isAvailable()) {
+                  alert('Background reminders only work on Android devices');
+                  return;
+                }
+                
+                try {
+                  const canSchedule = await backgroundReminders.canScheduleExactAlarms();
+                  const scheduled = await backgroundReminders.getScheduledReminders();
+                  
+                  let message = `🔔 Alarm Status:\n\n`;
+                  message += `✓ Can Schedule Exact Alarms: ${canSchedule ? 'YES' : 'NO ⚠️'}\n`;
+                  message += `✓ Battery Optimized: ${batteryExempted ? 'NO (Good)' : 'YES ⚠️'}\n\n`;
+                  
+                  if (scheduled && scheduled.reminders) {
+                    message += `📅 Scheduled Reminders (${scheduled.reminders.length}):\n\n`;
+                    scheduled.reminders.forEach((r: any, i: number) => {
+                      message += `${i + 1}. ${r.medicineName}\n`;
+                      message += `   Time: ${r.time}\n`;
+                      message += `   Critical: ${r.isCritical ? 'Yes' : 'No'}\n`;
+                      message += `   Voice: ${r.voiceEnabled ? 'On' : 'Off'}\n\n`;
+                    });
+                  } else {
+                    message += `❌ No reminders scheduled\n`;
+                  }
+                  
+                  alert(message);
+                } catch (error) {
+                  alert('Error checking alarm status: ' + error);
+                }
+              }}
+              className="w-full py-3 px-4 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors"
+            >
+              📊 View Alarm Status
+            </button>
+            
+            <button
+              onClick={async () => {
+                if (!backgroundReminders.isAvailable()) {
+                  alert('Test notifications only work on Android devices');
+                  return;
+                }
+                
+                try {
+                  // Schedule a test reminder for 30 seconds from now
+                  const now = new Date();
+                  now.setSeconds(now.getSeconds() + 30);
+                  const testTime = now.toTimeString().substring(0, 5); // HH:mm format
+                  
+                  const success = await backgroundReminders.scheduleReminder(
+                    'test_medicine',
+                    '🧪 Test Medicine',
+                    testTime,
+                    {
+                      dosage: '1 tablet',
+                      isCritical: false,
+                      instructions: 'This is a test reminder'
+                    }
+                  );
+                  
+                  if (success) {
+                    alert(`✅ Test alarm scheduled!\n\nYou should receive a notification in 30 seconds at ${testTime}.\n\nThe notification will have "✓ Taken" and "⏰ Snooze 15m" buttons.`);
+                  } else {
+                    alert('❌ Failed to schedule test alarm. Check permissions.');
+                  }
+                } catch (error) {
+                  alert('Error scheduling test: ' + error);
+                }
+              }}
+              className="w-full py-3 px-4 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700 transition-colors"
+            >
+              🧪 Test Alarm (30 sec)
+            </button>
+          </div>
+        </section>
+
          {/* Account */}
          <section>
              <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3 px-1">{t.account}</h2>

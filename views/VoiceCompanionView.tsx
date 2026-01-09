@@ -188,6 +188,88 @@ export const VoiceCompanionView: React.FC<VoiceCompanionProps> = ({
   const completedReminders = reminders.filter(r => r.status === 'COMPLETED');
   const ownerName = reminders.find(r => r.createdBy)?.createdBy;
 
+  // Calculate today's medicines with their status
+  const getTodaysMedicinesStatus = () => {
+    const today = new Date();
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+    
+    const todaysMeds: Array<{
+      medicine: Medicine;
+      time: string;
+      status: 'TAKEN' | 'PENDING';
+    }> = [];
+
+    console.log('[VoiceCompanion] Calculating today\'s medicines. Total medicines:', medicines.length);
+
+    medicines.forEach((medicine) => {
+      // Check if medicine is active today
+      const startDate = new Date(medicine.startDate);
+      const startMidnight = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
+      
+      console.log(`[VoiceCompanion] Medicine: ${medicine.name}`, {
+        startDate: startDate.toDateString(),
+        endDate: medicine.endDate ? new Date(medicine.endDate).toDateString() : 'None',
+        isOngoing: medicine.isOngoing,
+        todayStart: todayStart,
+        startMidnight: startMidnight,
+        times: medicine.times
+      });
+
+      if (todayStart < startMidnight) {
+        console.log(`[VoiceCompanion] Skipping ${medicine.name} - not started yet`);
+        return; // Not started yet
+      }
+      
+      // Check if medicine is ongoing or has no end date
+      const isActive = medicine.isOngoing === true || !medicine.endDate;
+      
+      if (!isActive && medicine.endDate) {
+        const endDate = new Date(medicine.endDate);
+        const endMidnight = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime();
+        if (todayStart > endMidnight) {
+          console.log(`[VoiceCompanion] Skipping ${medicine.name} - already ended`);
+          return; // Already ended
+        }
+      }
+
+      console.log(`[VoiceCompanion] Medicine ${medicine.name} is active today`);
+
+      // Check each scheduled time
+      medicine.times.forEach((time) => {
+        const log = medicineLogs.find((l) => {
+          const logDate = l.date instanceof Date ? l.date : new Date(l.date);
+          const logMidnight = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate()).getTime();
+          const normalizeTime = (t: string) => {
+            const parts = t.split(':').map(s => parseInt(s, 10));
+            if (parts.length < 2) return t.trim();
+            return `${parts[0].toString().padStart(2,'0')}:${parts[1].toString().padStart(2,'0')}`;
+          };
+          return (
+            l.medicineId === medicine.id &&
+            logMidnight === todayStart &&
+            normalizeTime(l.scheduledTime || '') === normalizeTime(time) &&
+            l.status === 'TAKEN'
+          );
+        });
+
+        todaysMeds.push({
+          medicine,
+          time,
+          status: log ? 'TAKEN' : 'PENDING'
+        });
+        
+        console.log(`[VoiceCompanion] Added ${medicine.name} at ${time} - Status: ${log ? 'TAKEN' : 'PENDING'}`);
+      });
+    });
+
+    console.log('[VoiceCompanion] Total today\'s medicines:', todaysMeds.length);
+    return todaysMeds;
+  };
+
+  const todaysMedicines = getTodaysMedicinesStatus();
+  const pendingMedicines = todaysMedicines.filter(m => m.status === 'PENDING');
+  const completedMedicines = todaysMedicines.filter(m => m.status === 'TAKEN');
+
   return (
     <div className="pb-48 pt-6 px-4 min-h-full bg-gray-50 animate-fade-in flex flex-col relative">
       
@@ -202,52 +284,48 @@ export const VoiceCompanionView: React.FC<VoiceCompanionProps> = ({
           </div>
       </div>
 
-      {/* Medicine Reminders Section */}
-            {medicines.length > 0 && onMarkTaken && onSkipMedicine && (
-                <div className="mb-8">
-                    <MedicineReminders 
-                        medicines={medicines}
-                        medicineLogs={medicineLogs}
-                        onMarkTaken={onMarkTaken}
-                        onSkip={onSkipMedicine}
-                        onSnooze={onSnoozeMedicine}
-                    />
-                </div>
-            )}
-
-      {/* Pending List */}
-      <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Upcoming</h2>
+      {/* Upcoming Medicines for Today */}
+      <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Upcoming Today</h2>
       <div className="space-y-3 mb-8">
-          {pendingReminders.length === 0 && (
-              <p className="text-gray-400 text-sm italic">No upcoming medications.</p>
+          {pendingMedicines.length === 0 && (
+              <p className="text-gray-400 text-sm italic">No upcoming medications for today.</p>
           )}
-          {pendingReminders.map(reminder => (
-              <div key={reminder.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
+          {pendingMedicines.map((item, idx) => (
+              <div key={`${item.medicine.id}-${item.time}-${idx}`} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
                   <div className="flex items-center gap-4">
                       <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-sm">
-                          {reminder.time}
+                          {item.time}
                       </div>
                       <div>
-                          <h3 className="font-bold text-gray-900">{reminder.title}</h3>
-                          <p className="text-xs text-gray-500">{reminder.instructions}</p>
+                          <h3 className="font-bold text-gray-900">{item.medicine.name}</h3>
+                          <p className="text-xs text-gray-500">{item.medicine.dosage}</p>
+                          {item.medicine.instructions && (
+                            <p className="text-xs text-gray-400 mt-1">{item.medicine.instructions}</p>
+                          )}
                       </div>
                   </div>
               </div>
           ))}
       </div>
 
-      {/* Completed List */}
+      {/* Completed Medicines Today */}
       <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Completed Today</h2>
       <div className="space-y-3 opacity-60">
-           {completedReminders.map(reminder => (
-              <div key={reminder.id} className="bg-gray-100 p-4 rounded-2xl flex items-center justify-between">
+           {completedMedicines.length === 0 && (
+              <p className="text-gray-400 text-sm italic">No medicines taken yet today.</p>
+          )}
+           {completedMedicines.map((item, idx) => (
+              <div key={`completed-${item.medicine.id}-${item.time}-${idx}`} className="bg-gray-100 p-4 rounded-2xl flex items-center justify-between">
                   <div className="flex items-center gap-4">
                       <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center text-green-600">
                           <Check size={20} />
                       </div>
                       <div>
-                          <h3 className="font-bold text-gray-600 line-through">{reminder.title}</h3>
-                          <p className="text-xs text-gray-400">Taken</p>
+                          <h3 className="font-bold text-gray-600 line-through">{item.medicine.name}</h3>
+                          <p className="text-xs text-gray-400">{item.medicine.dosage} • Taken at {item.time}</p>
+                          {item.medicine.instructions && (
+                            <p className="text-xs text-gray-400 mt-1">{item.medicine.instructions}</p>
+                          )}
                       </div>
                   </div>
               </div>

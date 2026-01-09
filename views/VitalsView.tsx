@@ -11,6 +11,7 @@ interface VitalsViewProps {
   vitalReadings?: VitalReading[];
   onAddVital?: (vital: Omit<VitalReading, 'id' | 'timestamp'>) => void;
   enteredBy?: 'senior' | 'caregiver';
+  householdId?: string;
 }
 
 export const VitalsView: React.FC<VitalsViewProps> = ({ 
@@ -19,7 +20,8 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
   isFitConnected = false, 
   vitalReadings = [],
   onAddVital,
-  enteredBy = 'senior'
+  enteredBy = 'senior',
+  householdId
 }) => {
   const [showVitalsEntry, setShowVitalsEntry] = useState(false);
   const [cooldownUntil, setCooldownUntil] = useState<Date | null>(null);
@@ -31,9 +33,12 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
   // Update daily steps from sensor data
   const dailySteps = steps;
 
-  // Check cooldown on mount and when vitalReadings changes
+  // Check cooldown on mount and when vitalReadings or householdId changes
   React.useEffect(() => {
-    const lastEntryStr = localStorage.getItem('vitalsLastCompletedEntry');
+    if (!householdId) return;
+    
+    const lastEntryKey = `vitalsLastCompletedEntry_${householdId}`;
+    const lastEntryStr = localStorage.getItem(lastEntryKey);
     if (lastEntryStr) {
       const lastEntry = new Date(lastEntryStr);
       const cooldownEnd = new Date(lastEntry.getTime() + 7 * 24 * 60 * 60 * 1000);
@@ -43,14 +48,14 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
       } else {
         // Cooldown has expired
         setCooldownUntil(null);
-        localStorage.removeItem('vitalsLastCompletedEntry');
+        localStorage.removeItem(lastEntryKey);
       }
     }
-  }, [vitalReadings]);
+  }, [vitalReadings, householdId]);
 
   // Update remaining time every minute
   React.useEffect(() => {
-    if (!cooldownUntil) return;
+    if (!cooldownUntil || !householdId) return;
     
     const updateTimer = () => {
       const now = new Date();
@@ -59,11 +64,11 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
       if (diff <= 0) {
         setCooldownUntil(null);
         setRemainingTime('');
-        localStorage.removeItem('vitalsLastCompletedEntry');
+        localStorage.removeItem(`vitalsLastCompletedEntry_${householdId}`);
         
         // Clear today's vitals tracking when cooldown expires
         const today = new Date().toDateString();
-        localStorage.removeItem(`vitals_entered_${today}`);
+        localStorage.removeItem(`vitals_entered_${householdId}_${today}`);
         return;
       }
       
@@ -77,11 +82,14 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
     updateTimer();
     const interval = setInterval(updateTimer, 60000); // Update every minute
     return () => clearInterval(interval);
-  }, [cooldownUntil]);
+  }, [cooldownUntil, householdId]);
 
   // Check if today is different from stored date, reset if needed
   React.useEffect(() => {
-    const lastEntryStr = localStorage.getItem('vitalsLastCompletedEntry');
+    if (!householdId) return;
+    
+    const lastEntryKey = `vitalsLastCompletedEntry_${householdId}`;
+    const lastEntryStr = localStorage.getItem(lastEntryKey);
     if (lastEntryStr) {
       const lastEntry = new Date(lastEntryStr);
       const lastEntryDate = lastEntry.toDateString();
@@ -89,10 +97,10 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
       
       // If it's a new day after cooldown expires, clear old tracking
       if (lastEntryDate !== today) {
-        localStorage.removeItem(`vitals_entered_${lastEntryDate}`);
+        localStorage.removeItem(`vitals_entered_${householdId}_${lastEntryDate}`);
       }
     }
-  }, []);
+  }, [householdId]);
 
   // Get latest manual vitals
   const getLatestVital = (type: 'bloodPressure' | 'temperature' | 'weight' | 'bloodSugar' | 'heartRate') => {
@@ -126,23 +134,25 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
   };
 
   const handleSaveVital = (vital: Omit<VitalReading, 'id' | 'timestamp'>) => {
-    if (onAddVital) {
+    if (onAddVital && householdId) {
       onAddVital(vital);
     }
     
-    // Store entry in localStorage for immediate tracking (don't wait for parent state)
+    if (!householdId) return;
+    
+    // Store entry in localStorage for immediate tracking (household-specific)
     const today = new Date().toDateString();
-    const storedKey = `vitals_entered_${today}`;
+    const storedKey = `vitals_entered_${householdId}_${today}`;
     const storedEntered = JSON.parse(localStorage.getItem(storedKey) || '[]') as string[];
     if (!storedEntered.includes(vital.type)) {
       storedEntered.push(vital.type);
     }
     localStorage.setItem(storedKey, JSON.stringify(storedEntered));
     
-    // Check if all 5 vitals are now entered today
-    if (storedEntered.length === 5) {
+    // Check if all 4 vitals are now entered today
+    if (storedEntered.length === 4) {
       const now = new Date();
-      localStorage.setItem('vitalsLastCompletedEntry', now.toISOString());
+      localStorage.setItem(`vitalsLastCompletedEntry_${householdId}`, now.toISOString());
       const cooldownEnd = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
       setCooldownUntil(cooldownEnd);
     }

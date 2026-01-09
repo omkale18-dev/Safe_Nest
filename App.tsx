@@ -35,8 +35,9 @@ import {
   registerLockScreenSOSHandler,
   cleanupEmergencyShortcuts 
 } from './services/emergencyShortcuts';
-import { sanitizeForLog } from './utils/sanitize';
+import { sanitizeForLog, getDeviceName } from './utils/sanitize';
 import * as googleFitService from './services/googleFit';
+import { backgroundReminders } from './services/backgroundReminders';
 
 const normalizePhone = (value: string) => value ? value.replace(/\D/g, '') : '';
 
@@ -278,6 +279,7 @@ const App = () => {
   const [isValidatingHousehold, setIsValidatingHousehold] = useState(false);
   const [isAppInForeground, setIsAppInForeground] = useState(true);
   const [isJoiningAnother, setIsJoiningAnother] = useState(false); // Track if joining another household from caregiver dashboard
+  const [showAlarmPermissionWarning, setShowAlarmPermissionWarning] = useState(false);
   const fallCountdownTimerRef = useRef<any>(null);
   const voiceDetectorRef = useRef<VoiceEmergencyDetector | null>(null);
   const [isVoiceEmergencyEnabled, setIsVoiceEmergencyEnabled] = useState(false);
@@ -481,7 +483,9 @@ const App = () => {
               name: seniorMember.name,
               role: seniorMember.role,
               avatar: seniorMember.avatar,
-              phone: seniorMember.phone
+              phone: seniorMember.phone,
+              deviceName: seniorMember.deviceName,
+              lastActiveDevice: seniorMember.lastActiveDevice
             };
           }
         } else {
@@ -495,7 +499,9 @@ const App = () => {
               name: existingMember.name,
               role: existingMember.role,
               avatar: existingMember.avatar,
-              phone: existingMember.phone
+              phone: existingMember.phone,
+              deviceName: existingMember.deviceName,
+              lastActiveDevice: existingMember.lastActiveDevice
             };
           }
         }
@@ -1576,21 +1582,25 @@ const App = () => {
     if (!householdId || !role) return;
     const registerMember = async () => {
       try {
+        const deviceName = getDeviceName();
         const memberData: HouseholdMember = {
           id: currentUser.id || `user-${Date.now()}`,
           name: currentUser.name,
           role,
           avatar: currentUser.avatar,
           phone: currentUser.phone,
-          joinedAt: new Date().toISOString()
+          joinedAt: new Date().toISOString(),
+          deviceName: role === UserRole.SENIOR ? deviceName : undefined,
+          lastActiveDevice: deviceName
         };
         await set(ref(db, `households/${householdId}/members/${memberData.id}`), memberData);
+        console.log('[Firebase] Member registered with device:', deviceName);
       } catch (e) {
         console.error('[Firebase] Failed to register member', e);
       }
     };
     registerMember();
-  }, [householdId, role, currentUser]);
+  }, [householdId, role, currentUser.id, currentUser.name, currentUser.avatar, currentUser.phone]);
 
   // Subscribe to household members
   useEffect(() => {
@@ -1655,6 +1665,8 @@ const App = () => {
           endDate: med.endDate ? new Date(med.endDate) : undefined,
           createdAt: new Date(med.createdAt),
           updatedAt: new Date(med.updatedAt),
+          // Ensure isOngoing is set (defaults to true if no endDate)
+          isOngoing: med.isOngoing !== undefined ? med.isOngoing : !med.endDate,
         })) as Medicine[];
         setMedicines(medicinesList);
       } else {
@@ -1663,6 +1675,131 @@ const App = () => {
     });
     return () => unsub();
   }, [householdId]);
+
+  // Schedule/reschedule background medicine reminders whenever medicines change
+  useEffect(() => {
+    if (!backgroundReminders.isAvailable() || medicines.length === 0) return;
+    
+    const scheduleReminders = async () => {
+      // Check alarm permission first
+      const canSchedule = await backgroundReminders.canScheduleExactAlarms();
+      console.log('[App] Can schedule exact alarms:', canSchedule);
+      
+      if (!canSchedule && role === UserRole.SENIOR) {
+        setShowAlarmPermissionWarning(true);
+        console.warn('[App] ⚠️ Exact alarm permission not granted - reminders may not work reliably');
+      }
+      
+      console.log('[App] Scheduling background reminders for', medicines.length, 'medicines');
+      
+      for (const medicine of medicines) {
+        try {
+          console.log(`[App] Scheduling ${medicine.name} with times:`, medicine.times);
+          const success = await backgroundReminders.scheduleMedicine(medicine);
+          console.log(`[App] ${success ? '✓' : '✗'} ${medicine.name}:`, success ? 'scheduled' : 'failed');
+        } catch (error) {
+          console.error('[App] Error scheduling reminders for', medicine.name, ':', error);
+        }
+      }
+      
+      // Verify what's scheduled
+      try {
+        const scheduled = await backgroundReminders.getScheduledReminders();
+        console.log('[App] Total scheduled reminders:', scheduled);
+      } catch (error) {
+        console.error('[App] Error getting scheduled reminders:', error);
+      }
+    };
+    
+    scheduleReminders();
+  }, [medicines, role]);
+
+  // Sync pending medicine actions from notification buttons
+  useEffect(() => {
+    if (!householdId || !backgroundReminders.isAvailable()) return;
+    
+    const syncPendingActions = async () => {
+      try {
+        console.log('[App] Checking for pending medicine actions...');
+        const pending = await backgroundReminders.getPendingActions();
+        
+        if (pending && pending.length > 0) {
+          console.log('[App] Found', pending.length, 'pending actions to sync');
+          
+          for (const action of pending) {
+            const { medicineId, scheduledTime, status, timestamp, date } = action;
+            
+            console.log('[App] Syncing action:', status, 'for', medicineId, 'at', scheduledTime);
+            
+            // Find the medicine
+            const medicine = medicines.find(m => m.id === medicineId);
+            if (!medicine) {
+              console.warn('[App] Medicine not found:', medicineId);
+              continue;
+            }
+            
+            // Create medicine log entry
+            if (status === 'TAKEN') {
+              const logId = `${medicineId}_${date}_${scheduledTime}`.replace(/:/g, '-');
+              const logEntry: MedicineLog = {
+                id: logId,
+                medicineId: medicineId,
+                medicineName: medicine.name,
+                dosage: medicine.dosage,
+                scheduledTime: scheduledTime,
+                takenTime: new Date(timestamp).toISOString(),
+                date: new Date(date),
+                status: 'TAKEN',
+                takenBy: 'senior',
+                notes: 'Marked from notification'
+              };
+              
+              await set(ref(db, `households/${householdId}/medicineLogs/${logId}`), {
+                ...logEntry,
+                date: logEntry.date.toISOString(),
+              });
+              
+              console.log('[App] ✓ Synced TAKEN action for', medicine.name);
+            } else if (status === 'SKIPPED') {
+              const logId = `${medicineId}_${date}_${scheduledTime}`.replace(/:/g, '-');
+              const logEntry: MedicineLog = {
+                id: logId,
+                medicineId: medicineId,
+                medicineName: medicine.name,
+                dosage: medicine.dosage,
+                scheduledTime: scheduledTime,
+                takenTime: new Date(timestamp).toISOString(),
+                date: new Date(date),
+                status: 'SKIPPED',
+                takenBy: 'senior',
+                notes: 'Skipped from notification'
+              };
+              
+              await set(ref(db, `households/${householdId}/medicineLogs/${logId}`), {
+                ...logEntry,
+                date: logEntry.date.toISOString(),
+              });
+              
+              console.log('[App] ✓ Synced SKIPPED action for', medicine.name);
+            }
+          }
+          
+          // Clear pending actions after sync
+          await backgroundReminders.clearPendingActions();
+          console.log('[App] ✓ All pending actions synced and cleared');
+        }
+      } catch (error) {
+        console.error('[App] Error syncing pending actions:', error);
+      }
+    };
+    
+    // Sync on mount and when medicines change
+    syncPendingActions();
+    
+    // Also sync periodically every 30 seconds while app is open
+    const interval = setInterval(syncPendingActions, 30000);
+    return () => clearInterval(interval);
+  }, [householdId, medicines]);
 
   // Subscribe to medicine logs
   useEffect(() => {
@@ -1884,7 +2021,7 @@ const App = () => {
   }, []);
 
   // Medicine handlers
-  const handleAddMedicine = (medicine: Medicine) => {
+  const handleAddMedicine = async (medicine: Medicine) => {
     const medicineId = Date.now().toString();
     const newMedicine = { ...medicine, id: medicineId };
     // Remove undefined values for Firebase
@@ -1893,7 +2030,28 @@ const App = () => {
         delete newMedicine[key as keyof Medicine];
       }
     });
-    set(ref(db, `households/${householdId}/medicines/${medicineId}`), newMedicine);
+    await set(ref(db, `households/${householdId}/medicines/${medicineId}`), newMedicine);
+    console.log('[App] Medicine saved to Firebase:', newMedicine.name, 'Times:', newMedicine.times);
+    
+    // Schedule background reminders for Android devices
+    if (backgroundReminders.isAvailable()) {
+      try {
+        const success = await backgroundReminders.scheduleMedicine(newMedicine);
+        if (success) {
+          console.log('[App] ✓ Background reminders scheduled for:', newMedicine.name);
+          
+          // Verify scheduled reminders
+          const scheduled = await backgroundReminders.getScheduledReminders();
+          console.log('[App] Currently scheduled reminders:', scheduled);
+        } else {
+          console.warn('[App] ✗ Failed to schedule background reminders for:', newMedicine.name);
+        }
+      } catch (error) {
+        console.error('[App] Error scheduling reminders:', error);
+      }
+    } else {
+      console.log('[App] Background reminders not available (web platform)');
+    }
   };
 
   const handleUpdateMedicine = (medicine: Medicine) => {
@@ -1905,10 +2063,30 @@ const App = () => {
       }
     });
     set(ref(db, `households/${householdId}/medicines/${medicine.id}`), cleanMedicine);
+    
+    // Reschedule background reminders for Android devices
+    if (backgroundReminders.isAvailable()) {
+      backgroundReminders.scheduleMedicine(cleanMedicine)
+        .then(success => {
+          if (success) {
+            console.log('[App] Background reminders rescheduled for:', cleanMedicine.name);
+          } else {
+            console.warn('[App] Failed to reschedule background reminders for:', cleanMedicine.name);
+          }
+        })
+        .catch(error => console.error('[App] Error rescheduling reminders:', error));
+    }
   };
 
   const handleDeleteMedicine = (medicineId: string) => {
     set(ref(db, `households/${householdId}/medicines/${medicineId}`), null);
+    
+    // Cancel background reminders for Android devices
+    if (backgroundReminders.isAvailable()) {
+      backgroundReminders.cancelMedicine(medicineId)
+        .then(() => console.log('[App] Background reminders cancelled for:', medicineId))
+        .catch(error => console.error('[App] Error cancelling reminders:', error));
+    }
   };
 
   const handleMarkTaken = (medicineId: string, scheduledTime: string) => {
@@ -2338,6 +2516,7 @@ const App = () => {
           vitalReadings={vitalReadings}
           onAddVital={handleAddVital}
           enteredBy="senior"
+          householdId={householdId}
           onRefresh={async () => {
             try {
               const ok = await googleFitService.hasPermissions();

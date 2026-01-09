@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Heart, Activity, MapPin, Zap, LogOut, Mic, Pill, AlertCircle, Plus, Thermometer, Gauge } from 'lucide-react';
+import { Heart, Activity, MapPin, Zap, LogOut, Mic, Pill, AlertCircle, Plus, Thermometer, Gauge, Check, Clock } from 'lucide-react';
 import { SeniorStatus, UserProfile, Medicine, MedicineLog, VitalReading } from '../types';
-import { MedicineReminders } from './MedicineReminders';
 import { ManualVitalsEntry } from './ManualVitalsEntry';
 import { useLanguage } from '../i18n/LanguageContext';
 
@@ -84,10 +83,15 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
   };
 
   const checkVitalsLockStatus = () => {
-    const nextAvailable = localStorage.getItem('nextVitalsAvailable');
+    if (!householdId) return;
     
-    if (nextAvailable) {
-      const nextDate = new Date(nextAvailable);
+    // Use household-specific key for senior-specific cooldown
+    const lastEntryKey = `vitalsLastCompletedEntry_${householdId}`;
+    const lastEntryStr = localStorage.getItem(lastEntryKey);
+    
+    if (lastEntryStr) {
+      const lastEntry = new Date(lastEntryStr);
+      const nextDate = new Date(lastEntry.getTime() + 7 * 24 * 60 * 60 * 1000);
       const now = new Date();
       
       if (now < nextDate) {
@@ -95,9 +99,8 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
         setIsVitalsLocked(true);
       } else {
         // Clear all lock-related data when 7 days have passed
-        localStorage.removeItem('lastVitalEntry');
-        localStorage.removeItem('nextVitalsAvailable');
-        localStorage.removeItem('vitalEntryTracker');
+        localStorage.removeItem(lastEntryKey);
+        localStorage.removeItem(`vitalEntryTracker_${householdId}`);
         setNextVitalsAvailable(null);
         setIsVitalsLocked(false);
       }
@@ -139,28 +142,25 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
   };
 
   const handleSaveVital = (vital: Omit<VitalReading, 'id' | 'timestamp'>) => {
-    if (onAddVital) {
+    if (onAddVital && householdId) {
       onAddVital(vital);
       
-      // Track which vitals have been entered
-      const tracker = JSON.parse(localStorage.getItem('vitalEntryTracker') || '{}');
-      tracker[vital.type] = new Date().toISOString();
-      localStorage.setItem('vitalEntryTracker', JSON.stringify(tracker));
+      // Store entry in localStorage for tracking (household-specific)
+      const today = new Date().toDateString();
+      const storedKey = `vitals_entered_${householdId}_${today}`;
+      const storedEntered = JSON.parse(localStorage.getItem(storedKey) || '[]') as string[];
+      if (!storedEntered.includes(vital.type)) {
+        storedEntered.push(vital.type);
+      }
+      localStorage.setItem(storedKey, JSON.stringify(storedEntered));
       
-      // Check if all 4 vitals have been entered
-      const allEntered = 
-        tracker.bloodPressure && 
-        tracker.temperature && 
-        tracker.weight && 
-        tracker.heartRate;
-      
-      if (allEntered) {
+      // Check if all 4 vitals are now entered today
+      if (storedEntered.length === 4) {
         // All 4 entered, now lock for 7 days
         const now = new Date();
         const nextAvailable = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
         
-        localStorage.setItem('lastVitalEntry', now.toISOString());
-        localStorage.setItem('nextVitalsAvailable', nextAvailable.toISOString());
+        localStorage.setItem(`vitalsLastCompletedEntry_${householdId}`, now.toISOString());
         
         setNextVitalsAvailable(nextAvailable);
         setIsVitalsLocked(true);
@@ -175,10 +175,10 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
     console.log('[SeniorHome] onSignOut:', typeof onSignOut);
   }, [onSignOut]);
 
-  // Check vitals lock status on mount and when vitalReadings change
+  // Check vitals lock status on mount and when vitalReadings or householdId change
   useEffect(() => {
     checkVitalsLockStatus();
-  }, [vitalReadings]);
+  }, [vitalReadings, householdId]);
 
   // Check vitals lock status periodically (every minute)
   useEffect(() => {
@@ -538,17 +538,118 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
         </div>
       </div>
 
-      {/* Medicine Reminder Card - Direct Actions */}
-      {medicines.length > 0 && (
-        <div className="mt-6">
-          <MedicineReminders
-            medicines={medicines}
-            medicineLogs={medicineLogs || []}
-            onMarkTaken={onMarkTaken || (() => {})}
-            onSkip={onSkipMedicine || (() => {})}
-          />
-        </div>
-      )}
+      {/* Today's Medicine Section */}
+      {medicines.length > 0 && (() => {
+        const today = new Date();
+        const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+        
+        const todaysMeds: Array<{
+          medicine: Medicine;
+          time: string;
+          status: 'TAKEN' | 'PENDING';
+        }> = [];
+
+        medicines.forEach((medicine) => {
+          // Check if medicine is active today
+          const startDate = new Date(medicine.startDate);
+          const startMidnight = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
+          
+          if (todayStart < startMidnight) return; // Not started yet
+          
+          // Check if medicine is ongoing or has no end date
+          const isActive = medicine.isOngoing === true || !medicine.endDate;
+          
+          if (!isActive && medicine.endDate) {
+            const endDate = new Date(medicine.endDate);
+            const endMidnight = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime();
+            if (todayStart > endMidnight) return; // Already ended
+          }
+
+          // Check each scheduled time
+          medicine.times.forEach((time) => {
+            const log = medicineLogs?.find((l) => {
+              const logDate = l.date instanceof Date ? l.date : new Date(l.date);
+              const logMidnight = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate()).getTime();
+              const normalizeTime = (t: string) => {
+                const parts = t.split(':').map(s => parseInt(s, 10));
+                if (parts.length < 2) return t.trim();
+                return `${parts[0].toString().padStart(2,'0')}:${parts[1].toString().padStart(2,'0')}`;
+              };
+              return (
+                l.medicineId === medicine.id &&
+                logMidnight === todayStart &&
+                normalizeTime(l.scheduledTime || '') === normalizeTime(time) &&
+                l.status === 'TAKEN'
+              );
+            });
+
+            todaysMeds.push({
+              medicine,
+              time,
+              status: log ? 'TAKEN' : 'PENDING'
+            });
+          });
+        });
+
+        const pendingMedicines = todaysMeds.filter(m => m.status === 'PENDING');
+        const completedMedicines = todaysMeds.filter(m => m.status === 'TAKEN');
+
+        return (
+          <div className="mt-6 space-y-6">
+            {/* Upcoming Medicines Today */}
+            <div>
+              <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Upcoming Today</h2>
+              <div className="space-y-3">
+                {pendingMedicines.length === 0 && (
+                  <p className="text-gray-400 text-sm italic">No upcoming medications for today.</p>
+                )}
+                {pendingMedicines.map((item, idx) => (
+                  <div key={`${item.medicine.id}-${item.time}-${idx}`} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-sm">
+                        {item.time}
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-900">{item.medicine.name}</h3>
+                        <p className="text-xs text-gray-500">{item.medicine.dosage}</p>
+                        {item.medicine.instructions && (
+                          <p className="text-xs text-gray-400 mt-1">{item.medicine.instructions}</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Completed Medicines Today */}
+            <div>
+              <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Completed Today</h2>
+              <div className="space-y-3 opacity-60">
+                {completedMedicines.length === 0 && (
+                  <p className="text-gray-400 text-sm italic">No medicines taken yet today.</p>
+                )}
+                {completedMedicines.map((item, idx) => (
+                  <div key={`completed-${item.medicine.id}-${item.time}-${idx}`} className="bg-gray-100 p-4 rounded-2xl flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center text-green-600">
+                        <Check size={20} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-600 line-through">{item.medicine.name}</h3>
+                        <p className="text-xs text-gray-400">{item.medicine.dosage} • Taken at {item.time}</p>
+                        {item.medicine.instructions && (
+                          <p className="text-xs text-gray-400 mt-1">{item.medicine.instructions}</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Manual Vitals Entry Modal */}
       {showVitalsEntry && onAddVital && (

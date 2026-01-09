@@ -27,10 +27,20 @@ const isMedicineActiveOnDate = (medicine: Medicine, targetDate: Date): boolean =
   const targetMidnight = getLocalMidnight(targetDate);
   const startDate = new Date(medicine.startDate);
   const startMidnight = getLocalMidnight(startDate);
-  const endMidnight = medicine.endDate ? getLocalMidnight(new Date(medicine.endDate)) : null;
   
-  const isActive = startMidnight <= targetMidnight && (!endMidnight || endMidnight >= targetMidnight);
-  return isActive;
+  // If it's before the start date, it's not active
+  if (targetMidnight < startMidnight) {
+    return false;
+  }
+  
+  // If isOngoing is true or endDate is not set, it's active (no end date)
+  if (medicine.isOngoing === true || !medicine.endDate) {
+    return true;
+  }
+  
+  // Check against end date if it exists
+  const endMidnight = getLocalMidnight(new Date(medicine.endDate));
+  return targetMidnight <= endMidnight;
 };
 
 // Check if a scheduled time has passed today
@@ -181,8 +191,21 @@ export const MedicineReminders: React.FC<MedicineRemindersProps> = ({
     const today = new Date();
     const medicines_for_today: typeof todaysMedicines = [];
 
+    console.log('[MedicineReminders] Building today\'s medicines list. Total medicines:', medicines.length, 'Date:', today.toDateString());
+
     medicines.forEach((medicine) => {
-      if (isMedicineActiveOnDate(medicine, today)) {
+      // Check if medicine is active on today's date
+      const isActive = isMedicineActiveOnDate(medicine, today);
+      
+      console.log(`[MedicineReminders] Medicine: ${medicine.name}`, {
+        startDate: medicine.startDate?.toString(),
+        endDate: medicine.endDate?.toString(),
+        isOngoing: medicine.isOngoing,
+        isActive: isActive,
+        times: medicine.times
+      });
+
+      if (isActive) {
         medicine.times.forEach((time, timeIndex) => {
           const log = medicineLogs.find((l) => {
             const logDate = l.date instanceof Date ? l.date : new Date(l.date);
