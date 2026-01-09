@@ -1,7 +1,16 @@
-import React, { useState } from 'react';
-import { ArrowLeft, Camera, Save, User, Phone } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ArrowLeft, Camera, Save, User, Phone, Smartphone } from 'lucide-react';
 import { UserProfile } from '../types';
 import * as googleFitService from '../services/googleFit';
+import { ref, onValue } from 'firebase/database';
+import { db } from '../services/firebase';
+
+interface DeviceInfo {
+  deviceName: string;
+  loginTime: string;
+  lastActive: string;
+  phone: string;
+}
 
 interface ProfileViewProps {
     user: UserProfile;
@@ -17,6 +26,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ user, onBack, onSave, 
   const [isSaving, setIsSaving] = useState(false);
   const [isFitConnected, setIsFitConnected] = useState<boolean | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
+  const [deviceInfo, setDeviceInfo] = useState<DeviceInfo | null>(null);
   const displayHouseholdId = (householdId || localStorage.getItem('safenest_household_id') || '').toString().trim();
 
   // Check Google Fit status on mount
@@ -32,6 +42,20 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ user, onBack, onSave, 
     })();
     return () => { mounted = false };
   }, []);
+
+  // Listen to device info from Firebase
+  useEffect(() => {
+    if (!displayHouseholdId) return;
+    
+    const deviceRef = ref(db, `households/${displayHouseholdId}/connectedDevice`);
+    const unsub = onValue(deviceRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setDeviceInfo(snapshot.val() as DeviceInfo);
+      }
+    });
+    
+    return () => unsub();
+  }, [displayHouseholdId]);
 
   const handleSave = () => {
     setIsSaving(true);
@@ -123,6 +147,23 @@ export const ProfileView: React.FC<ProfileViewProps> = ({ user, onBack, onSave, 
                                         Share this code with caregivers to link devices.
                                     </p>
                                 </div>
+                                {/* Connected Device Info */}
+                                {deviceInfo && deviceInfo.phone === user.phone && (
+                                  <div className="pt-4 border-t border-blue-100">
+                                    <div className="flex items-center gap-2 mb-2">
+                                      <Smartphone size={16} className="text-green-600" />
+                                      <h3 className="font-bold text-blue-800 text-sm">Connected Device</h3>
+                                      <span className="inline-block w-2 h-2 bg-green-600 rounded-full"></span>
+                                    </div>
+                                    <p className="text-sm font-semibold text-blue-900">{deviceInfo.deviceName}</p>
+                                    <p className="text-xs text-blue-600 mt-1">
+                                      Logged in: {new Date(deviceInfo.loginTime).toLocaleDateString()} at {new Date(deviceInfo.loginTime).toLocaleTimeString()}
+                                    </p>
+                                    <p className="text-xs text-blue-600">
+                                      Last active: {new Date(deviceInfo.lastActive).toLocaleTimeString()}
+                                    </p>
+                                  </div>
+                                )}
                                 {/* Google Fit Connect */}
                                 <div className="pt-4 border-t border-blue-100">
                                     <h3 className="font-bold text-blue-800 text-sm mb-1">Connect Smartwatch</h3>

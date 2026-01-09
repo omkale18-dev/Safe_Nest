@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Phone, Navigation, Battery, Heart, Layers, Plus, CheckCircle, XCircle, Clock, LogOut, Map as MapIcon, Pill, Activity, Bell, Home, Settings, MapPin, Calendar, Droplets, Shield, Gauge } from 'lucide-react';
+import { ArrowLeft, Phone, Navigation, Battery, Heart, Layers, Plus, CheckCircle, XCircle, Clock, LogOut, Map as MapIcon, Pill, Activity, Bell, Home, Settings, MapPin, Calendar, Droplets, Shield, Gauge, Smartphone, AlertCircle } from 'lucide-react';
 import { SeniorStatus, ActivityItem, Reminder, HouseholdMember, UserRole, Medicine, MedicineLog, VitalReading, DoctorAppointment, Geofence, WaterSettings } from '../types';
 import { BottomNav } from '../components/BottomNav';
 import { MedicineManager } from './MedicineManager';
@@ -8,6 +8,8 @@ import { CaregiverVitalsView } from './CaregiverVitalsView';
 import { ManualVitalsEntry } from './ManualVitalsEntry';
 import { DoctorAppointmentsView } from './DoctorAppointmentsView';
 import { GeofenceView } from './GeofenceView';
+import { ref, set, onValue } from 'firebase/database';
+import { db } from '../services/firebase';
 
 declare var L: any;
 
@@ -77,6 +79,25 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
   const [activeTab, setActiveTab] = useState<'home' | 'map' | 'medicine' | 'vitals' | 'compliance' | 'settings' | 'appointments' | 'safezone'>('home');
   const [mapType, setMapType] = useState<'street' | 'satellite'>('street');
   const [selectedSeniorId, setSelectedSeniorId] = useState<string | null>(null);
+  const [isResettingDevice, setIsResettingDevice] = useState(false);
+  const [connectedDevice, setConnectedDevice] = useState<{deviceName: string; loginTime: string; lastActive: string; phone: string} | null>(null);
+
+  // Listen to connected device info from Firebase
+  useEffect(() => {
+    if (!householdId) return;
+    
+    const deviceRef = ref(db, `households/${householdId}/connectedDevice`);
+    
+    const unsub = onValue(deviceRef, (snapshot: any) => {
+      if (snapshot.exists()) {
+        setConnectedDevice(snapshot.val());
+      } else {
+        setConnectedDevice(null);
+      }
+    });
+    
+    return () => unsub();
+  }, [householdId]);
 
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<any>(null);
@@ -88,6 +109,17 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
   const caregiverWatchIdRef = useRef<number | null>(null);
 
   const isEmergency = seniorStatus.status !== 'Normal';
+
+  const locationLabel = (() => {
+    const loc = seniorStatus.location;
+    if (!loc) return 'Locating...';
+    const addr = loc.address || '';
+    const placeholders = ['Locating...', 'Initializing GPS...', 'GPS Signal Weak'];
+    if (!addr || placeholders.includes(addr)) {
+      return 'Locating...';
+    }
+    return addr;
+  })();
 
   // Helper to get latest vital reading
   const getLatestVital = (type: VitalReading['type']) => {
@@ -111,6 +143,28 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
     if (stopAlert) stopAlert();
     if (!senior) return;
     window.open(`tel:${senior.phone.replace(/\D/g,'')}`, '_self');
+  };
+
+  // Reset/disconnect senior's device - allows them to login from a different device
+  const handleResetDeviceAccess = async () => {
+    if (!householdId) return;
+    
+    const confirmed = window.confirm(
+      `Reset ${senior?.name || 'senior'}'s device access?\n\nThey will be able to log in from a different device.`
+    );
+    if (!confirmed) return;
+    
+    setIsResettingDevice(true);
+    try {
+      await set(ref(db, `households/${householdId}/connectedDevice`), null);
+      alert('✅ Device access reset. Senior can now login from another device.');
+      console.log('[CaregiverDashboard] Device access reset for household:', householdId);
+    } catch (e) {
+      console.error('[CaregiverDashboard] Failed to reset device access:', e);
+      alert('❌ Failed to reset device access. Please try again.');
+    } finally {
+      setIsResettingDevice(false);
+    }
   };
 
   // Open Google Maps directions (origin = caregiver location if available)
@@ -414,6 +468,27 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
               <h1 className="text-3xl font-bold text-gray-900 mb-1">Dashboard</h1>
               <p className="text-gray-600">Monitoring {senior?.name || 'Senior'}</p>
             </div>
+
+            {/* Connected Device Info (simplified) */}
+            {connectedDevice ? (
+              <div className="bg-gradient-to-br from-green-50 to-white border-2 border-green-200 rounded-2xl p-5">
+                <div className="flex items-center gap-2 mb-2">
+                  <Smartphone size={20} className="text-green-600" />
+                  <h3 className="font-bold text-green-900">Device Connected</h3>
+                  <span className="inline-block w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></span>
+                </div>
+                <p className="text-sm text-green-800 font-semibold">
+                  Last active: {connectedDevice.lastActive ? new Date(connectedDevice.lastActive).toLocaleTimeString() : '—'}
+                </p>
+              </div>
+            ) : (
+              <div className="bg-gray-50 border-2 border-gray-200 rounded-2xl p-5">
+                <div className="flex items-center gap-3 text-gray-600">
+                  <Smartphone size={20} className="text-gray-400" />
+                  <p className="font-semibold text-gray-700">No Device Connected</p>
+                </div>
+              </div>
+            )}
 
             {/* Emergency Status Banner */}
             {isEmergency && (
@@ -830,7 +905,7 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
                             <div className={`w-2 h-2 rounded-full ${isEmergency ? 'bg-red-600 animate-pulse' : 'bg-green-500'}`}></div>
                             {isEmergency ? seniorStatus.status : 'Safe at Home'}
                         </div>
-                        <h2 className="text-lg font-bold text-gray-900 line-clamp-2 break-words">{seniorStatus.location.address}</h2>
+                        <h2 className="text-lg font-bold text-gray-900 line-clamp-2 break-words">{locationLabel}</h2>
                     </div>
                     <div className="flex flex-col items-end justify-center gap-2 flex-shrink-0">
                         <div className="flex items-center gap-1.5 text-gray-600 text-sm font-medium whitespace-nowrap"><Battery size={16} /> {seniorStatus.batteryLevel}%</div>

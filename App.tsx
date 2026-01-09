@@ -37,8 +37,34 @@ import {
 } from './services/emergencyShortcuts';
 import { sanitizeForLog } from './utils/sanitize';
 import * as googleFitService from './services/googleFit';
+import { isOnline } from './services/network';
+import { offlineStore } from './services/offlineStore';
+import { backgroundReminders } from './services/backgroundReminders';
 
 const normalizePhone = (value: string) => value ? value.replace(/\D/g, '') : '';
+
+// Get device name from user agent or Capacitor
+const getDeviceName = async (): Promise<string> => {
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const device = await (window as any).Device?.getInfo?.();
+      if (device) {
+        return `${device.manufacturer} ${device.model}`;
+      }
+    } catch (e) {
+      console.warn('[Device] Failed to get device info:', e);
+    }
+  }
+  
+  // Fallback to browser info
+  const ua = navigator.userAgent;
+  if (ua.includes('Android')) return 'Android Device';
+  if (ua.includes('iPhone')) return 'iPhone';
+  if (ua.includes('iPad')) return 'iPad';
+  if (ua.includes('Windows')) return 'Windows PC';
+  if (ua.includes('Mac')) return 'Mac';
+  return 'Unknown Device';
+};
 
 // Generic helper: write to Firebase when online, otherwise enqueue for later
 const pushDbUpdate = (path: string, data: any, onSuccess?: () => void) => {
@@ -281,6 +307,7 @@ const App = () => {
   const fallCountdownTimerRef = useRef<any>(null);
   const voiceDetectorRef = useRef<VoiceEmergencyDetector | null>(null);
   const [isVoiceEmergencyEnabled, setIsVoiceEmergencyEnabled] = useState(false);
+  const [showAlarmPermissionWarning, setShowAlarmPermissionWarning] = useState(false);
 
   const handleLookupCodeByPhone = async (phone: string): Promise<string | null> => {
     const normalized = normalizePhone(phone);
@@ -1361,12 +1388,29 @@ const App = () => {
       localStorage.setItem('safenest_user_profile', JSON.stringify(profile));
       localStorage.setItem('safenest_household_id', cleanCode);
       
-      // If senior, register phone in index
+      // If senior, register phone in index and store device info
       if (selectedRole === UserRole.SENIOR && profile.phone) {
         const normalized = normalizePhone(profile.phone);
-        console.log('[Rejoin] Registering phone in index:', normalized);
         if (normalized.length === 10) {
-          await set(ref(db, `phoneIndex/${normalized}`), cleanCode);
+          try {
+            await set(ref(db, `phoneIndex/${normalized}`), cleanCode);
+          } catch (e) {
+            console.error('Failed to register phone in index:', e);
+          }
+          
+          // Store device info so caregivers can see which device is connected
+          try {
+            const deviceName = await getDeviceName();
+            const deviceInfo = {
+              deviceName: deviceName,
+              loginTime: new Date().toISOString(),
+              lastActive: new Date().toISOString(),
+              phone: profile.phone,
+            };
+            await set(ref(db, `households/${cleanCode}/connectedDevice`), deviceInfo);
+          } catch (e) {
+            console.error('Failed to store device info:', e);
+          }
         }
       }
 
@@ -1464,6 +1508,41 @@ const App = () => {
     };
     ensureMeta();
   }, [role, householdId, currentUser.name, currentUser.phone]);
+
+  // Check alarm permissions and schedule medicine reminders for senior
+  useEffect(() => {
+    if (role !== UserRole.SENIOR || medicines.length === 0) return;
+    
+    const checkAndSchedule = async () => {
+      try {
+        // Check if we can schedule exact alarms
+        const canSchedule = await backgroundReminders.canScheduleExactAlarms();
+        console.log('[Medicine] Can schedule exact alarms:', canSchedule);
+        
+        if (!canSchedule) {
+          // Show warning banner if permission is missing
+          setShowAlarmPermissionWarning(true);
+        } else {
+          setShowAlarmPermissionWarning(false);
+        }
+        
+        // Schedule reminders for all medicines
+        console.log('[Medicine] Scheduling reminders for', medicines.length, 'medicines');
+        for (const medicine of medicines) {
+          try {
+            await backgroundReminders.scheduleMedicine(medicine);
+            console.log('[Medicine] Scheduled:', medicine.name);
+          } catch (e) {
+            console.error('[Medicine] Failed to schedule:', medicine.name, e);
+          }
+        }
+      } catch (e) {
+        console.error('[Medicine] Error checking permissions or scheduling:', e);
+      }
+    };
+    
+    checkAndSchedule();
+  }, [role, medicines]);
 
   // Senior device: write status to Firebase when changes occur
   useEffect(() => {
@@ -1651,10 +1730,10 @@ const App = () => {
       if (data) {
         const medicinesList = Object.values(data).map((med: any) => ({
           ...med,
-          startDate: new Date(med.startDate),
+          startDate: med.startDate ? new Date(med.startDate) : new Date(),
           endDate: med.endDate ? new Date(med.endDate) : undefined,
-          createdAt: new Date(med.createdAt),
-          updatedAt: new Date(med.updatedAt),
+          createdAt: med.createdAt ? new Date(med.createdAt) : new Date(),
+          updatedAt: med.updatedAt ? new Date(med.updatedAt) : new Date(),
         })) as Medicine[];
         setMedicines(medicinesList);
       } else {
@@ -1804,10 +1883,10 @@ const App = () => {
         const data = snapshot.val();
         const medsList = data ? Object.values(data).map((med: any) => ({
           ...med,
-          startDate: new Date(med.startDate),
+          startDate: med.startDate ? new Date(med.startDate) : new Date(),
           endDate: med.endDate ? new Date(med.endDate) : undefined,
-          createdAt: new Date(med.createdAt),
-          updatedAt: new Date(med.updatedAt),
+          createdAt: med.createdAt ? new Date(med.createdAt) : new Date(),
+          updatedAt: med.updatedAt ? new Date(med.updatedAt) : new Date(),
         })) as Medicine[] : [];
         setAllMedicines(prev => ({ ...prev, [hId]: medsList }));
         console.log(`[App] onValue medicines for household ${hId}, count=`, medsList.length);
@@ -1884,7 +1963,13 @@ const App = () => {
   }, []);
 
   // Medicine handlers
-  const handleAddMedicine = (medicine: Medicine) => {
+  const handleAddMedicine = async (medicine: Medicine) => {
+    const targetHouseholdId = role === UserRole.CAREGIVER ? (activeHouseholdId || householdId) : householdId;
+    if (!targetHouseholdId) {
+      console.error('[Medicine] No household selected, cannot add medicine');
+      return;
+    }
+
     const medicineId = Date.now().toString();
     const newMedicine = { ...medicine, id: medicineId };
     // Remove undefined values for Firebase
@@ -1893,10 +1978,33 @@ const App = () => {
         delete newMedicine[key as keyof Medicine];
       }
     });
-    set(ref(db, `households/${householdId}/medicines/${medicineId}`), newMedicine);
+    const serializedMedicine = {
+      ...newMedicine,
+      startDate: newMedicine.startDate ? new Date(newMedicine.startDate).toISOString() : new Date().toISOString(),
+      endDate: newMedicine.endDate ? new Date(newMedicine.endDate).toISOString() : undefined,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await set(ref(db, `households/${targetHouseholdId}/medicines/${medicineId}`), serializedMedicine);
+    
+    // Schedule background reminders for this medicine
+    try {
+      const success = await backgroundReminders.scheduleMedicine(newMedicine);
+      if (success) {
+        console.log('[Medicine] Background reminders scheduled for:', newMedicine.name);
+      }
+    } catch (e) {
+      console.error('[Medicine] Failed to schedule background reminders:', e);
+    }
   };
 
-  const handleUpdateMedicine = (medicine: Medicine) => {
+  const handleUpdateMedicine = async (medicine: Medicine) => {
+    const targetHouseholdId = role === UserRole.CAREGIVER ? (activeHouseholdId || householdId) : householdId;
+    if (!targetHouseholdId) {
+      console.error('[Medicine] No household selected, cannot update medicine');
+      return;
+    }
+
     // Remove undefined values for Firebase
     const cleanMedicine = { ...medicine };
     Object.keys(cleanMedicine).forEach(key => {
@@ -1904,11 +2012,42 @@ const App = () => {
         delete cleanMedicine[key as keyof Medicine];
       }
     });
-    set(ref(db, `households/${householdId}/medicines/${medicine.id}`), cleanMedicine);
+    const serializedMedicine = {
+      ...cleanMedicine,
+      startDate: cleanMedicine.startDate ? new Date(cleanMedicine.startDate).toISOString() : new Date().toISOString(),
+      endDate: cleanMedicine.endDate ? new Date(cleanMedicine.endDate).toISOString() : undefined,
+      createdAt: cleanMedicine.createdAt ? new Date(cleanMedicine.createdAt).toISOString() : new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await set(ref(db, `households/${targetHouseholdId}/medicines/${medicine.id}`), serializedMedicine);
+    
+    // Reschedule background reminders for updated medicine
+    try {
+      const success = await backgroundReminders.scheduleMedicine(cleanMedicine);
+      if (success) {
+        console.log('[Medicine] Background reminders rescheduled for:', cleanMedicine.name);
+      }
+    } catch (e) {
+      console.error('[Medicine] Failed to reschedule background reminders:', e);
+    }
   };
 
-  const handleDeleteMedicine = (medicineId: string) => {
-    set(ref(db, `households/${householdId}/medicines/${medicineId}`), null);
+  const handleDeleteMedicine = async (medicineId: string) => {
+    const targetHouseholdId = role === UserRole.CAREGIVER ? (activeHouseholdId || householdId) : householdId;
+    if (!targetHouseholdId) {
+      console.error('[Medicine] No household selected, cannot delete medicine');
+      return;
+    }
+
+    await set(ref(db, `households/${targetHouseholdId}/medicines/${medicineId}`), null);
+    
+    // Cancel background reminders for deleted medicine
+    try {
+      await backgroundReminders.cancelMedicine(medicineId);
+      console.log('[Medicine] Background reminders cancelled for:', medicineId);
+    } catch (e) {
+      console.error('[Medicine] Failed to cancel background reminders:', e);
+    }
   };
 
   const handleMarkTaken = (medicineId: string, scheduledTime: string) => {
@@ -2076,8 +2215,21 @@ const App = () => {
   };
 
   const handleSignOut = () => {
+    // Show confirmation dialog
+    const confirmed = window.confirm('Are you sure you want to sign out?');
+    if (!confirmed) {
+      return;
+    }
+
     try {
       stopCaregiverAlert();
+      
+      // Clear connected device info from Firebase when signing out
+      if (householdId && role === UserRole.SENIOR) {
+        set(ref(db, `households/${householdId}/connectedDevice`), null)
+          .catch(e => console.error('[SignOut] Failed to clear device info:', e));
+      }
+      
       localStorage.removeItem('safenest_user_profile');
       localStorage.removeItem('safenest_household_id');
       localStorage.removeItem('safenest_household_ids');
