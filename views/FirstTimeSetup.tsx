@@ -153,14 +153,12 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({ onComplete, onRe
         }
       }
 
-      // If senior, check if senior exists in household and auto-login
+      // If senior, check if senior exists in household - block multiple devices
       if (selectedRole === UserRole.SENIOR && onCheckExistingMember) {
         const existingProfile = await onCheckExistingMember(cleanCode, '');
         if (existingProfile && existingProfile.role === UserRole.SENIOR) {
-          // Senior exists - auto-login with existing profile
-          if (onRejoinWithCode) {
-            onRejoinWithCode(cleanCode, existingProfile, existingProfile.role);
-          }
+          // Senior already exists - block joining from another device
+          setLocalError('This household already has a senior connected. Only one device per senior is allowed. Please use your original device or contact your caregiver to reset access.');
           setLocalValidating(false);
           return;
         }

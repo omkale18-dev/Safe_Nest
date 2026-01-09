@@ -374,7 +374,7 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50 relative pb-24 w-full pt-[max(env(safe-area-inset-top),28px)]">
+    <div className="flex flex-col h-screen bg-white relative pb-6 w-full pt-[max(env(safe-area-inset-top),16px)]">
       
       {/* Header */}
             <div className={`shadow-sm px-4 py-4 flex items-center justify-between z-[50] bg-white flex-shrink-0`}>

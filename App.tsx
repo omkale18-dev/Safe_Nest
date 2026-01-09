@@ -68,22 +68,40 @@ const pushDbUpdate = (path: string, data: any, onSuccess?: () => void) => {
 };
 
 // Cache helpers for offline reads
+const safeToISOString = (value: any): string => {
+  try {
+    const d = value instanceof Date ? value : new Date(value);
+    return isNaN(d.getTime()) ? new Date().toISOString() : d.toISOString();
+  } catch {
+    return new Date().toISOString();
+  }
+};
+
+const safeToDate = (value: any): Date => {
+  try {
+    const d = value instanceof Date ? value : new Date(value);
+    return isNaN(d.getTime()) ? new Date() : d;
+  } catch {
+    return new Date();
+  }
+};
+
 const serializeMedicine = (med: any) => ({
   ...med,
-  startDate: med.startDate instanceof Date ? med.startDate.toISOString() : med.startDate,
-  endDate: med.endDate ? (med.endDate instanceof Date ? med.endDate.toISOString() : med.endDate) : null,
-  createdAt: med.createdAt instanceof Date ? med.createdAt.toISOString() : med.createdAt,
-  updatedAt: med.updatedAt instanceof Date ? med.updatedAt.toISOString() : med.updatedAt,
+  startDate: safeToISOString(med.startDate),
+  endDate: med.endDate ? safeToISOString(med.endDate) : null,
+  createdAt: safeToISOString(med.createdAt),
+  updatedAt: safeToISOString(med.updatedAt),
 });
 const deserializeMedicine = (med: any) => ({
   ...med,
-  startDate: new Date(med.startDate),
-  endDate: med.endDate ? new Date(med.endDate) : undefined,
-  createdAt: new Date(med.createdAt),
-  updatedAt: new Date(med.updatedAt),
+  startDate: safeToDate(med.startDate),
+  endDate: med.endDate ? safeToDate(med.endDate) : undefined,
+  createdAt: safeToDate(med.createdAt),
+  updatedAt: safeToDate(med.updatedAt),
 });
-const serializeMedicineLog = (log: any) => ({ ...log, date: log.date instanceof Date ? log.date.toISOString() : log.date });
-const deserializeMedicineLog = (log: any) => ({ ...log, date: new Date(log.date) });
+const serializeMedicineLog = (log: any) => ({ ...log, date: safeToISOString(log.date) });
+const deserializeMedicineLog = (log: any) => ({ ...log, date: safeToDate(log.date) });
 
 // Global widget event queue - register listener at module load time
 let setAppStatusGlobal: ((status: AppStatus) => void) | null = null;
@@ -1016,8 +1034,8 @@ const App = () => {
   // Caregiver Alert Sound Logic - Uses native sound + vibration
   const playCaregiverAlert = async () => {
       try {
-          // Vibration (works even when phone is silent)
-          if (navigator.vibrate) {
+            // Vibration (native only; browsers may block without user gesture)
+            if (Capacitor.isNativePlatform() && navigator.vibrate) {
               try {
                   navigator.vibrate([500, 200, 500, 200, 500, 200, 500, 200, 500, 200, 500]);
               } catch (e) {
@@ -1064,7 +1082,7 @@ const App = () => {
           clearInterval(sirenIntervalRef.current);
           sirenIntervalRef.current = null;
       }
-      if (navigator.vibrate) {
+        if (Capacitor.isNativePlatform() && navigator.vibrate) {
           try {
               navigator.vibrate(0);
           } catch (e) {
@@ -3187,8 +3205,8 @@ const App = () => {
 
     if (role === UserRole.CAREGIVER) {
       const senior = householdMembers.find(m => m.role === UserRole.SENIOR);
-      // Caregivers use activeHouseholdId directly (no fallback to householdId)
-      const caregiverSelectedHouseholdId = activeHouseholdId || householdIds[0] || householdId || '';
+      // Caregivers: use the explicitly selected household; avoid arbitrary fallbacks that can show wrong data
+      const caregiverSelectedHouseholdId = activeHouseholdId || householdId || '';
       const caregiverLogs = allMedicineLogs[caregiverSelectedHouseholdId] || [];
       const caregiverMeds = allMedicines[caregiverSelectedHouseholdId] || [];
       console.log('[App] Caregiver render:', {
@@ -3328,11 +3346,11 @@ const App = () => {
   };
 
   return (
-    <div className="min-h-screen w-full bg-white flex flex-col font-sans text-gray-900">
+    <div className="w-full h-screen bg-white flex flex-col font-sans text-gray-900 overflow-hidden">
            {/* Alarm Permission Warning Banner - SIMPLIFIED */}
            {showAlarmPermissionWarning && (
              <div 
-               className="bg-amber-500 text-white p-4 w-full"
+               className="bg-amber-500 text-white p-4 w-full flex-shrink-0"
              >
                <p className="font-semibold mb-2">⚠️ Medicine reminders may not work</p>
                <p className="text-xs mb-3 opacity-90">Please enable exact alarms permission in settings.</p>
@@ -3362,7 +3380,7 @@ const App = () => {
            )}
 
            {/* Scrollable Content Area */}
-           <div className="flex-1 flex flex-col overflow-y-auto no-scrollbar relative bg-white pb-24">
+           <div className="flex-1 overflow-y-auto no-scrollbar flex flex-col bg-white pb-20">
               {renderCurrentView()}
            </div>
 

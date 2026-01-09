@@ -274,6 +274,7 @@ public class MedicineRemindersPlugin extends Plugin {
     
     /**
      * Open system settings to enable exact alarms (Android 12+)
+     * Tries multiple approaches to help user grant permission
      */
     @PluginMethod
     public void requestExactAlarmPermission(PluginCall call) {
@@ -286,41 +287,73 @@ public class MedicineRemindersPlugin extends Plugin {
                 Log.d(TAG, "Activity is null? " + (activity == null));
                 
                 if (activity == null) {
-                    Log.e(TAG, "❌ Activity is null, cannot proceed");
-                    call.reject("Activity not available");
-                    return;
+                    Log.e(TAG, "❌ Activity is null, trying with context");
+                    // Try with context if activity not available
+                    try {
+                        android.content.Intent intent = new android.content.Intent(
+                            android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                            android.net.Uri.parse("package:" + getContext().getPackageName())
+                        );
+                        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                        getContext().startActivity(intent);
+                        Log.d(TAG, "✅ Opened exact alarm settings from context");
+                        call.resolve();
+                        return;
+                    } catch (Exception e) {
+                        Log.e(TAG, "❌ Context approach failed: " + e.getMessage());
+                        call.reject("Activity not available and context fallback failed");
+                        return;
+                    }
                 }
                 
                 activity.runOnUiThread(() -> {
                     Log.d(TAG, "🔵 Running on UI thread...");
                     boolean launched = false;
-                    android.content.Context ctx = getContext();
 
-                    // Direct approach: open app settings where user can toggle exact alarms
-                    try {
-                        Log.d(TAG, "Opening app details settings...");
-                        android.content.Intent appSettings = new android.content.Intent(
-                            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                            android.net.Uri.parse("package:" + getContext().getPackageName())
-                        );
-                        appSettings.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                        
-                        activity.startActivity(appSettings);
-                        Log.d(TAG, "✅ Started app settings activity");
-                        launched = true;
-                    } catch (Exception e) {
-                        Log.e(TAG, "❌ Failed to open app settings: " + e.getMessage(), e);
+                    // Approach 1: ACTION_REQUEST_SCHEDULE_EXACT_ALARM (Android 12+, most direct)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                        try {
+                            Log.d(TAG, "Trying ACTION_REQUEST_SCHEDULE_EXACT_ALARM...");
+                            android.content.Intent exactAlarmIntent = new android.content.Intent(
+                                android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                                android.net.Uri.parse("package:" + getContext().getPackageName())
+                            );
+                            exactAlarmIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                            activity.startActivity(exactAlarmIntent);
+                            Log.d(TAG, "✅ Opened exact alarm permission screen");
+                            launched = true;
+                        } catch (Exception e) {
+                            Log.e(TAG, "❌ ACTION_REQUEST_SCHEDULE_EXACT_ALARM failed: " + e.getMessage(), e);
+                        }
                     }
 
+                    // Approach 2: Fallback to app details settings
                     if (!launched) {
                         try {
-                            Log.d(TAG, "Fallback: Opening general Settings...");
+                            Log.d(TAG, "Fallback: Opening app details settings...");
+                            android.content.Intent appSettings = new android.content.Intent(
+                                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                android.net.Uri.parse("package:" + getContext().getPackageName())
+                            );
+                            appSettings.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                            activity.startActivity(appSettings);
+                            Log.d(TAG, "✅ Started app settings activity");
+                            launched = true;
+                        } catch (Exception e) {
+                            Log.e(TAG, "❌ Failed to open app settings: " + e.getMessage(), e);
+                        }
+                    }
+
+                    // Approach 3: Last resort - general Settings
+                    if (!launched) {
+                        try {
+                            Log.d(TAG, "Last resort: Opening general Settings...");
                             android.content.Intent settings = new android.content.Intent(android.provider.Settings.ACTION_SETTINGS);
                             settings.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
                             activity.startActivity(settings);
                             Log.d(TAG, "✅ Started general settings");
                         } catch (Exception e) {
-                            Log.e(TAG, "❌ Fallback also failed: " + e.getMessage(), e);
+                            Log.e(TAG, "❌ All approaches failed: " + e.getMessage(), e);
                         }
                     }
                 });

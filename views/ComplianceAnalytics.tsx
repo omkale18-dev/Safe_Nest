@@ -3,6 +3,7 @@ import { TrendingUp, AlertCircle, CheckCircle, Activity, AlertTriangle, Heart, D
 import { Medicine, MedicineLog, VitalReading } from '../types';
 import { analyzeHealthData } from '../services/healthPredictions';
 import { VitalsChart } from '../components/VitalsChart';
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 
 interface ComplianceAnalyticsProps {
   medicines: Medicine[];
@@ -585,18 +586,51 @@ export const ComplianceAnalytics: React.FC<ComplianceAnalyticsProps> = ({
 </html>
       `;
 
-      // Create blob and download
+      // Create blob and download/save to file
       const blob = new Blob([content], { type: 'text/html' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `SafeNest_Health_Report_${new Date().toISOString().split('T')[0]}.html`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const fileName = `SafeNest_Health_Report_${new Date().toISOString().split('T')[0]}.html`;
+      
+      // Try to save to device file manager (Android/iOS)
+      try {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          const base64 = (e.target?.result as string).split(',')[1];
+          try {
+            const result = await Filesystem.writeFile({
+              path: fileName,
+              data: base64,
+              directory: Directory.Documents,
+              encoding: Encoding.UTF8,
+            });
+            console.log('✅ Report saved to:', result.uri);
+            alert(`✅ Report saved to Documents folder!\nFile: ${fileName}`);
+          } catch (saveError) {
+            console.warn('Could not save to Documents, trying cache:', saveError);
+            // Fallback: save to cache directory
+            try {
+              const cacheResult = await Filesystem.writeFile({
+                path: fileName,
+                data: base64,
+                directory: Directory.Cache,
+                encoding: Encoding.UTF8,
+              });
+              console.log('✅ Report saved to cache:', cacheResult.uri);
+              alert(`✅ Report saved!\nFile: ${fileName}`);
+            } catch (cacheError) {
+              console.error('Failed to save to cache too:', cacheError);
+              // Last resort: download as blob in browser
+              downloadAsBlob(blob, fileName);
+            }
+          }
+        };
+        reader.readAsDataURL(blob);
+      } catch (e) {
+        console.warn('Filesystem plugin not available, using browser download:', e);
+        // Fallback to browser download
+        downloadAsBlob(blob, fileName);
+      }
 
-      // Also offer to print as PDF
+      // Also offer to print as PDF (for web/browser)
       const printWindow = window.open('', '_blank');
       if (printWindow) {
         printWindow.document.write(content);
@@ -611,6 +645,18 @@ export const ComplianceAnalytics: React.FC<ComplianceAnalyticsProps> = ({
     } finally {
       setIsGeneratingPdf(false);
     }
+  };
+
+  // Helper: fallback download function for browsers
+  const downloadAsBlob = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   // Medicine compliance stats (original logic)
