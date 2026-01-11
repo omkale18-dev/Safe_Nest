@@ -25,6 +25,9 @@ export interface UserProfile {
   role: UserRole;
   avatar: string;
   phone: string;
+  email?: string; // Email address for notifications and OTP verification
+  isPhoneVerified?: boolean; // Phone OTP verification status
+  isEmailVerified?: boolean; // Email OTP verification status
   deviceName?: string; // Device name where senior is logged in
   lastActiveDevice?: string; // Last device that was active
 }

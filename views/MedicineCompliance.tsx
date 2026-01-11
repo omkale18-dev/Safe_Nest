@@ -12,6 +12,15 @@ export const MedicineCompliance: React.FC<MedicineComplianceProps> = ({
   medicineLogs,
 }) => {
   console.log('[MedicineCompliance] Received props:', { medicinesCount: medicines.length, logsCount: medicineLogs.length });
+  console.log('[MedicineCompliance] Sample logs:', medicineLogs.slice(0, 3).map(l => ({
+    id: l.id,
+    medicineId: l.medicineId,
+    status: l.status,
+    date: l.date,
+    dateType: typeof l.date,
+    isDateObject: l.date instanceof Date
+  })));
+  
   const complianceStats = useMemo(() => {
     console.log('[MedicineCompliance] Recalculating stats with logs:', medicineLogs.map(l => ({ id: l.id, status: l.status, date: l.date })));
     const today = new Date();

@@ -351,15 +351,17 @@ export const MedicineReminders: React.FC<MedicineRemindersProps> = ({
           <Pill size={20} className="text-purple-600" />
           <h2 className="text-lg font-semibold text-gray-900">Today's Medicines</h2>
         </div>
-        <button
-          onClick={() => setVoiceOn(!voiceOn)}
-          className={`p-2 rounded-full transition-colors ${
-            voiceOn ? 'bg-purple-100 text-purple-600' : 'bg-gray-100 text-gray-400'
-          }`}
-          title={voiceOn ? 'Voice reminders ON' : 'Voice reminders OFF'}
-        >
-          {voiceOn ? <Volume2 size={20} /> : <VolumeX size={20} />}
-        </button>
+        {voiceEnabled && (
+          <button
+            onClick={() => setVoiceOn(!voiceOn)}
+            className={`p-2 rounded-full transition-colors ${
+              voiceOn ? 'bg-purple-100 text-purple-600' : 'bg-gray-100 text-gray-400'
+            }`}
+            title={voiceOn ? 'Voice reminders ON' : 'Voice reminders OFF'}
+          >
+            {voiceOn ? <Volume2 size={20} /> : <VolumeX size={20} />}
+          </button>
+        )}
       </div>
 
       {/* Missed Alert Banner */}

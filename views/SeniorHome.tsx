@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Heart, Activity, MapPin, Zap, LogOut, Mic, Pill, AlertCircle, Plus, Thermometer, Gauge, Check, Clock } from 'lucide-react';
+import { Heart, Activity, MapPin, Zap, LogOut, Mic, Pill, AlertCircle, Plus, Thermometer, Gauge, Check, Clock, Droplets, Scale, Wind } from 'lucide-react';
 import { SeniorStatus, UserProfile, Medicine, MedicineLog, VitalReading } from '../types';
 import { ManualVitalsEntry } from './ManualVitalsEntry';
 import { useLanguage } from '../i18n/LanguageContext';
@@ -51,9 +51,10 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
   const [showVitalsEntry, setShowVitalsEntry] = useState(false);
   const [nextVitalsAvailable, setNextVitalsAvailable] = useState<Date | null>(null);
   const [isVitalsLocked, setIsVitalsLocked] = useState(false);
+  const [showAllVitals, setShowAllVitals] = useState(false);
   
   // Get latest vital reading of a specific type
-  const getLatestVital = (type: 'bloodPressure' | 'temperature' | 'weight' | 'heartRate') => {
+  const getLatestVital = (type: 'bloodPressure' | 'temperature' | 'weight' | 'heartRate' | 'spo2' | 'bloodSugar' | 'stress') => {
     const filtered = vitalReadings
       .filter(v => v.type === type && v.source === 'manual')
       .sort((a, b) => {
@@ -68,6 +69,9 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
   const latestTemp = getLatestVital('temperature');
   const latestWeight = getLatestVital('weight');
   const latestHR = getLatestVital('heartRate');
+  const latestSpO2 = getLatestVital('spo2');
+  const latestBloodSugar = getLatestVital('bloodSugar');
+  const latestStress = getLatestVital('stress');
 
   const formatTimestamp = (timestamp: Date | string) => {
     const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
@@ -281,6 +285,7 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
 
   return (
     <div className="pb-24 pt-4 px-4 space-y-6 animate-fade-in">
+
       {/* Header - Clickable for Profile Edit */}
       <div 
         className="flex justify-between items-center cursor-pointer active:opacity-70 transition-opacity"
@@ -340,6 +345,180 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
         </div>
       </div>
 
+      {/* Today's Medicine Section */}
+      {medicines.length > 0 && (() => {
+        const today = new Date();
+        const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+        
+        // Helper to check if time is overdue
+        const isTimeOverdue = (scheduledTime: string, graceMinutes: number = 30): boolean => {
+          const [hours, minutes] = scheduledTime.split(':').map(Number);
+          const now = new Date();
+          const scheduledDate = new Date();
+          scheduledDate.setHours(hours, minutes, 0, 0);
+          const overdueThreshold = new Date(scheduledDate.getTime() + graceMinutes * 60 * 1000);
+          return now > overdueThreshold;
+        };
+
+        const todaysMeds: Array<{
+          medicine: Medicine;
+          time: string;
+          status: 'TAKEN' | 'PENDING' | 'OVERDUE';
+        }> = [];
+
+        medicines.forEach((medicine) => {
+          // Check if medicine is active today
+          const startDate = new Date(medicine.startDate);
+          const startMidnight = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
+          
+          if (todayStart < startMidnight) return; // Not started yet
+          
+          // Check if medicine is ongoing or has no end date
+          const isActive = medicine.isOngoing === true || !medicine.endDate;
+          
+          if (!isActive && medicine.endDate) {
+            const endDate = new Date(medicine.endDate);
+            const endMidnight = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime();
+            if (todayStart > endMidnight) return; // Already ended
+          }
+
+          // Check each scheduled time
+          medicine.times.forEach((time) => {
+            const log = medicineLogs?.find((l) => {
+              const logDate = l.date instanceof Date ? l.date : new Date(l.date);
+              const logMidnight = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate()).getTime();
+              const normalizeTime = (t: string) => {
+                const parts = t.split(':').map(s => parseInt(s, 10));
+                if (parts.length < 2) return t.trim();
+                return `${parts[0].toString().padStart(2,'0')}:${parts[1].toString().padStart(2,'0')}`;
+              };
+              return (
+                l.medicineId === medicine.id &&
+                logMidnight === todayStart &&
+                normalizeTime(l.scheduledTime || '') === normalizeTime(time) &&
+                l.status === 'TAKEN'
+              );
+            });
+
+            let status: 'TAKEN' | 'PENDING' | 'OVERDUE' = log ? 'TAKEN' : 'PENDING';
+            
+            // Check if overdue (time passed + 30 min grace period)
+            if (status === 'PENDING' && isTimeOverdue(time)) {
+              status = 'OVERDUE';
+            }
+
+            todaysMeds.push({
+              medicine,
+              time,
+              status
+            });
+          });
+        });
+
+        const pendingMedicines = todaysMeds.filter(m => m.status === 'PENDING' || m.status === 'OVERDUE');
+        const completedMedicines = todaysMeds.filter(m => m.status === 'TAKEN');
+
+        return (
+          <div className="mt-6 space-y-6">
+            {/* Upcoming Medicines Today */}
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <Pill size={20} className="text-purple-600" />
+                <h2 className="text-lg font-semibold text-gray-900">Today's Medicines</h2>
+              </div>
+              <div className="space-y-3">
+                {pendingMedicines.length === 0 && (
+                  <p className="text-gray-400 text-sm italic">No upcoming medications for today.</p>
+                )}
+                {pendingMedicines.map((item, idx) => (
+                  <div key={`${item.medicine.id}-${item.time}-${idx}`} className={`bg-white p-4 rounded-2xl shadow-sm border ${
+                    item.status === 'OVERDUE' ? 'border-yellow-300 bg-yellow-50' : 'border-gray-100'
+                  }`}>
+                    {/* Overdue Warning */}
+                    {item.status === 'OVERDUE' && (
+                      <div className="bg-yellow-100 border border-yellow-300 rounded-lg px-3 py-1.5 mb-3 flex items-center gap-2">
+                        <AlertCircle size={16} className="text-yellow-700" />
+                        <p className="text-xs font-bold text-yellow-800">
+                          ⏰ Medicine time has passed!
+                        </p>
+                      </div>
+                    )}
+                    
+                    <div className="flex items-center gap-4 mb-3">
+                      <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-sm ${
+                        item.status === 'OVERDUE' ? 'bg-yellow-100 text-yellow-700' : 'bg-blue-50 text-blue-600'
+                      }`}>
+                        {item.time}
+                      </div>
+                      <div className="flex-1">
+                        <h3 className="font-bold text-gray-900">{item.medicine.name}</h3>
+                        <p className="text-xs text-gray-500">{item.medicine.dosage}</p>
+                        {item.medicine.instructions && (
+                          <p className="text-xs text-gray-400 mt-1">{item.medicine.instructions}</p>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* Action Buttons */}
+                    {onMarkTaken && onSkipMedicine && (
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => onMarkTaken(item.medicine.id, item.time)}
+                          className={`flex-1 py-2 text-white text-sm font-bold rounded-lg transition-colors ${
+                            item.status === 'OVERDUE' ? 'bg-yellow-600 hover:bg-yellow-700' : 'bg-green-600 hover:bg-green-700'
+                          }`}
+                        >
+                          ✓ {item.status === 'OVERDUE' ? 'Took Late' : 'Taken'}
+                        </button>
+                        <button
+                          onClick={() => {
+                            // Cast to function with 3 parameters to handle MISSED vs SKIPPED
+                            const skipFn = onSkipMedicine as (medicineId: string, time: string, markAsMissed?: boolean) => void;
+                            skipFn(item.medicine.id, item.time, item.status === 'OVERDUE');
+                          }}
+                          className={`flex-1 py-2 border-2 text-sm font-semibold rounded-lg transition-colors ${
+                            item.status === 'OVERDUE' 
+                              ? 'border-red-300 text-red-700 hover:bg-red-50' 
+                              : 'border-gray-300 text-gray-700 hover:bg-gray-50'
+                          }`}
+                        >
+                          {item.status === 'OVERDUE' ? '✗ Missed' : 'Skip'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Completed Medicines Today */}
+            {completedMedicines.length > 0 && (
+              <div>
+                <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Completed Today</h2>
+                <div className="space-y-3 opacity-60">
+                  {completedMedicines.map((item, idx) => (
+                    <div key={`completed-${item.medicine.id}-${item.time}-${idx}`} className="bg-gray-100 p-4 rounded-2xl flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center text-green-600">
+                          <Check size={20} />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-gray-600 line-through">{item.medicine.name}</h3>
+                          <p className="text-xs text-gray-400">{item.medicine.dosage} • Taken at {item.time}</p>
+                          {item.medicine.instructions && (
+                            <p className="text-xs text-gray-400 mt-1">{item.medicine.instructions}</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Vitals */}
       <div>
         <div className="flex items-center justify-between mb-3">
@@ -347,21 +526,31 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
             <Activity size={20} className="text-blue-600" />
             <h2 className="text-lg font-semibold text-gray-900">{t.myVitals}</h2>
           </div>
-          {onAddVital && (
-            <button
-              onClick={() => setShowVitalsEntry(true)}
-              disabled={isVitalsLocked}
-              className={`flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full border transition-colors ${
-                isVitalsLocked
-                  ? 'text-gray-400 bg-gray-50 border-gray-200 cursor-not-allowed opacity-60'
-                  : 'text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 border-blue-200'
-              }`}
-              title={isVitalsLocked ? 'Vitals locked. Next entry available in 7 days.' : 'Add vital reading'}
-            >
-              <Plus size={14} />
-              <span>Add</span>
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            {onAddVital && (
+              <button
+                onClick={() => setShowVitalsEntry(true)}
+                disabled={isVitalsLocked}
+                className={`flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full border transition-colors ${
+                  isVitalsLocked
+                    ? 'text-gray-400 bg-gray-50 border-gray-200 cursor-not-allowed opacity-60'
+                    : 'text-blue-600 hover:text-blue-700 bg-blue-50 hover:bg-blue-100 border-blue-200'
+                }`}
+                title={isVitalsLocked ? 'Vitals locked. Next entry available in 7 days.' : 'Add vital reading'}
+              >
+                <Plus size={14} />
+                <span>Add</span>
+              </button>
+            )}
+            {(latestBP || latestHR || latestTemp || latestWeight || latestSpO2 || latestBloodSugar || latestStress) && (
+              <button
+                onClick={() => setShowAllVitals(!showAllVitals)}
+                className="flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full border text-gray-600 hover:text-gray-800 bg-gray-50 hover:bg-gray-100 border-gray-200 transition-colors"
+              >
+                <span>{showAllVitals ? 'Show Less' : 'View All'}</span>
+              </button>
+            )}
+          </div>
         </div>
         {isVitalsLocked && nextVitalsAvailable && (
           <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4 flex items-start gap-3">
@@ -386,65 +575,204 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
 
         {/* Manual Vital Readings */}
         <div className="mt-4 space-y-4">
-          {/* Blood Pressure Card */}
-          {latestBP && (
-            <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-              <div className="flex justify-between items-start mb-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-orange-50 rounded-full flex items-center justify-center">
-                    <Gauge className="text-orange-500" size={20} />
+          {(() => {
+            const allVitals = [
+              latestBP && { type: 'bp', component: (
+                <div key="bp" className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-orange-50 rounded-full flex items-center justify-center">
+                        <Gauge className="text-orange-500" size={20} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-900">Blood Pressure</h3>
+                        <p className="text-gray-500 text-xs">{formatTimestamp(latestBP.timestamp)}</p>
+                      </div>
+                    </div>
+                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                      (latestBP.value as { systolic: number }).systolic > 140 
+                        ? 'bg-red-100 text-red-700' 
+                        : 'bg-green-100 text-green-700'
+                    }`}>
+                      {(latestBP.value as { systolic: number }).systolic > 140 ? 'Elevated' : 'Normal'}
+                    </span>
                   </div>
-                  <div>
-                    <h3 className="font-bold text-gray-900">Blood Pressure</h3>
-                    <p className="text-gray-500 text-xs">{formatTimestamp(latestBP.timestamp)}</p>
+                  <div className="flex items-end gap-1">
+                    <span className="text-4xl font-bold text-gray-900">
+                      {`${(latestBP.value as { systolic: number; diastolic: number }).systolic}/${(latestBP.value as { systolic: number; diastolic: number }).diastolic}`}
+                    </span>
+                    <span className="text-gray-500 font-semibold mb-1">mmHg</span>
                   </div>
+                  {latestBP.notes && <p className="text-xs text-gray-600 mt-2">{latestBP.notes}</p>}
                 </div>
-                <span className={`px-2 py-1 rounded-full text-xs font-bold ${
-                  (latestBP.value as { systolic: number }).systolic > 140 
-                    ? 'bg-red-100 text-red-700' 
-                    : 'bg-green-100 text-green-700'
-                }`}>
-                  {(latestBP.value as { systolic: number }).systolic > 140 ? 'Elevated' : 'Normal'}
-                </span>
-              </div>
-              <div className="flex items-end gap-1">
-                <span className="text-4xl font-bold text-gray-900">
-                  {`${(latestBP.value as { systolic: number; diastolic: number }).systolic}/${(latestBP.value as { systolic: number; diastolic: number }).diastolic}`}
-                </span>
-                <span className="text-gray-500 font-semibold mb-1">mmHg</span>
-              </div>
-              {latestBP.notes && <p className="text-xs text-gray-600 mt-2">{latestBP.notes}</p>}
-            </div>
-          )}
+              )},
+              latestHR && { type: 'hr', component: (
+                <div key="hr" className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-red-50 rounded-full flex items-center justify-center">
+                        <Heart className="text-red-500" size={20} fill="currentColor" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-900">Heart Rate (Manual)</h3>
+                        <p className="text-gray-500 text-xs">{formatTimestamp(latestHR.timestamp)}</p>
+                      </div>
+                    </div>
+                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                      (latestHR.value as number) < 60 || (latestHR.value as number) > 100
+                        ? 'bg-yellow-100 text-yellow-700'
+                        : 'bg-green-100 text-green-700'
+                    }`}>
+                      {(latestHR.value as number) < 60 || (latestHR.value as number) > 100 ? 'Abnormal' : 'Normal'}
+                    </span>
+                  </div>
+                  <div className="flex items-end gap-1">
+                    <span className="text-4xl font-bold text-gray-900">{Math.round(latestHR.value as number)}</span>
+                    <span className="text-gray-500 font-semibold mb-1">bpm</span>
+                  </div>
+                  {latestHR.notes && <p className="text-xs text-gray-600 mt-2">{latestHR.notes}</p>}
+                </div>
+              )},
+              latestTemp && { type: 'temp', component: (
+                <div key="temp" className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-blue-50 rounded-full flex items-center justify-center">
+                        <Thermometer className="text-blue-500" size={20} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-900">Temperature</h3>
+                        <p className="text-gray-500 text-xs">{formatTimestamp(latestTemp.timestamp)}</p>
+                      </div>
+                    </div>
+                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                      (latestTemp.value as number) < 97 || (latestTemp.value as number) > 99
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-green-100 text-green-700'
+                    }`}>
+                      {(latestTemp.value as number) < 97 || (latestTemp.value as number) > 99 ? 'Abnormal' : 'Normal'}
+                    </span>
+                  </div>
+                  <div className="flex items-end gap-1">
+                    <span className="text-4xl font-bold text-gray-900">{(latestTemp.value as number).toFixed(1)}</span>
+                    <span className="text-gray-500 font-semibold mb-1">°F</span>
+                  </div>
+                  {latestTemp.notes && <p className="text-xs text-gray-600 mt-2">{latestTemp.notes}</p>}
+                </div>
+              )},
+              latestWeight && { type: 'weight', component: (
+                <div key="weight" className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-purple-50 rounded-full flex items-center justify-center">
+                        <Scale className="text-purple-500" size={20} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-900">Weight</h3>
+                        <p className="text-gray-500 text-xs">{formatTimestamp(latestWeight.timestamp)}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-end gap-1">
+                    <span className="text-4xl font-bold text-gray-900">{Math.round(latestWeight.value as number)}</span>
+                    <span className="text-gray-500 font-semibold mb-1">lbs</span>
+                  </div>
+                  {latestWeight.notes && <p className="text-xs text-gray-600 mt-2">{latestWeight.notes}</p>}
+                </div>
+              )},
+              latestSpO2 && { type: 'spo2', component: (
+                <div key="spo2" className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-cyan-50 rounded-full flex items-center justify-center">
+                        <Wind className="text-cyan-500" size={20} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-900">Oxygen Saturation</h3>
+                        <p className="text-gray-500 text-xs">{formatTimestamp(latestSpO2.timestamp)}</p>
+                      </div>
+                    </div>
+                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                      (latestSpO2.value as number) < 95
+                        ? 'bg-red-100 text-red-700'
+                        : 'bg-green-100 text-green-700'
+                    }`}>
+                      {(latestSpO2.value as number) < 95 ? 'Low' : 'Normal'}
+                    </span>
+                  </div>
+                  <div className="flex items-end gap-1">
+                    <span className="text-4xl font-bold text-gray-900">{Math.round(latestSpO2.value as number)}</span>
+                    <span className="text-gray-500 font-semibold mb-1">%</span>
+                  </div>
+                  {latestSpO2.notes && <p className="text-xs text-gray-600 mt-2">{latestSpO2.notes}</p>}
+                </div>
+              )},
+              latestBloodSugar && { type: 'sugar', component: (
+                <div key="sugar" className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-pink-50 rounded-full flex items-center justify-center">
+                        <Droplets className="text-pink-500" size={20} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-900">Blood Sugar</h3>
+                        <p className="text-gray-500 text-xs">{formatTimestamp(latestBloodSugar.timestamp)}</p>
+                      </div>
+                    </div>
+                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                      (latestBloodSugar.value as number) < 70 || (latestBloodSugar.value as number) > 140
+                        ? 'bg-yellow-100 text-yellow-700'
+                        : 'bg-green-100 text-green-700'
+                    }`}>
+                      {(latestBloodSugar.value as number) < 70 || (latestBloodSugar.value as number) > 140 ? 'Abnormal' : 'Normal'}
+                    </span>
+                  </div>
+                  <div className="flex items-end gap-1">
+                    <span className="text-4xl font-bold text-gray-900">{Math.round(latestBloodSugar.value as number)}</span>
+                    <span className="text-gray-500 font-semibold mb-1">mg/dL</span>
+                  </div>
+                  {latestBloodSugar.notes && <p className="text-xs text-gray-600 mt-2">{latestBloodSugar.notes}</p>}
+                </div>
+              )},
+              latestStress && { type: 'stress', component: (
+                <div key="stress" className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-indigo-50 rounded-full flex items-center justify-center">
+                        <Activity className="text-indigo-500" size={20} />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-900">Stress Level</h3>
+                        <p className="text-gray-500 text-xs">{formatTimestamp(latestStress.timestamp)}</p>
+                      </div>
+                    </div>
+                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                      (latestStress.value as number) > 70
+                        ? 'bg-red-100 text-red-700'
+                        : (latestStress.value as number) > 50
+                        ? 'bg-yellow-100 text-yellow-700'
+                        : 'bg-green-100 text-green-700'
+                    }`}>
+                      {(latestStress.value as number) > 70 ? 'High' : (latestStress.value as number) > 50 ? 'Moderate' : 'Low'}
+                    </span>
+                  </div>
+                  <div className="flex items-end gap-1">
+                    <span className="text-4xl font-bold text-gray-900">{Math.round(latestStress.value as number)}</span>
+                    <span className="text-gray-500 font-semibold mb-1">/100</span>
+                  </div>
+                  {latestStress.notes && <p className="text-xs text-gray-600 mt-2">{latestStress.notes}</p>}
+                </div>
+              )}
+            ].filter(Boolean);
 
-          {/* Heart Rate Card */}
-          {latestHR && (
-            <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100">
-              <div className="flex justify-between items-start mb-3">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-red-50 rounded-full flex items-center justify-center">
-                    <Heart className="text-red-500" size={20} fill="currentColor" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-gray-900">Heart Rate (Manual)</h3>
-                    <p className="text-gray-500 text-xs">{formatTimestamp(latestHR.timestamp)}</p>
-                  </div>
-                </div>
-                <span className={`px-2 py-1 rounded-full text-xs font-bold ${
-                  (latestHR.value as number) < 60 || (latestHR.value as number) > 100
-                    ? 'bg-yellow-100 text-yellow-700'
-                    : 'bg-green-100 text-green-700'
-                }`}>
-                  {(latestHR.value as number) < 60 || (latestHR.value as number) > 100 ? 'Abnormal' : 'Normal'}
-                </span>
-              </div>
-              <div className="flex items-end gap-1">
-                <span className="text-4xl font-bold text-gray-900">{Math.round(latestHR.value as number)}</span>
-                <span className="text-gray-500 font-semibold mb-1">bpm</span>
-              </div>
-              {latestHR.notes && <p className="text-xs text-gray-600 mt-2">{latestHR.notes}</p>}
-            </div>
-          )}
+            const visibleVitals = showAllVitals ? allVitals : allVitals.slice(0, 2);
+            
+            return visibleVitals.length > 0 ? (
+              <>{visibleVitals.map(v => v!.component)}</>
+            ) : (
+              <p className="text-gray-400 text-sm italic">No vitals recorded yet.</p>
+            );
+          })()}
         </div>
       </div>
 
@@ -537,119 +865,6 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
           </div>
         </div>
       </div>
-
-      {/* Today's Medicine Section */}
-      {medicines.length > 0 && (() => {
-        const today = new Date();
-        const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-        
-        const todaysMeds: Array<{
-          medicine: Medicine;
-          time: string;
-          status: 'TAKEN' | 'PENDING';
-        }> = [];
-
-        medicines.forEach((medicine) => {
-          // Check if medicine is active today
-          const startDate = new Date(medicine.startDate);
-          const startMidnight = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
-          
-          if (todayStart < startMidnight) return; // Not started yet
-          
-          // Check if medicine is ongoing or has no end date
-          const isActive = medicine.isOngoing === true || !medicine.endDate;
-          
-          if (!isActive && medicine.endDate) {
-            const endDate = new Date(medicine.endDate);
-            const endMidnight = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime();
-            if (todayStart > endMidnight) return; // Already ended
-          }
-
-          // Check each scheduled time
-          medicine.times.forEach((time) => {
-            const log = medicineLogs?.find((l) => {
-              const logDate = l.date instanceof Date ? l.date : new Date(l.date);
-              const logMidnight = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate()).getTime();
-              const normalizeTime = (t: string) => {
-                const parts = t.split(':').map(s => parseInt(s, 10));
-                if (parts.length < 2) return t.trim();
-                return `${parts[0].toString().padStart(2,'0')}:${parts[1].toString().padStart(2,'0')}`;
-              };
-              return (
-                l.medicineId === medicine.id &&
-                logMidnight === todayStart &&
-                normalizeTime(l.scheduledTime || '') === normalizeTime(time) &&
-                l.status === 'TAKEN'
-              );
-            });
-
-            todaysMeds.push({
-              medicine,
-              time,
-              status: log ? 'TAKEN' : 'PENDING'
-            });
-          });
-        });
-
-        const pendingMedicines = todaysMeds.filter(m => m.status === 'PENDING');
-        const completedMedicines = todaysMeds.filter(m => m.status === 'TAKEN');
-
-        return (
-          <div className="mt-6 space-y-6">
-            {/* Upcoming Medicines Today */}
-            <div>
-              <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Upcoming Today</h2>
-              <div className="space-y-3">
-                {pendingMedicines.length === 0 && (
-                  <p className="text-gray-400 text-sm italic">No upcoming medications for today.</p>
-                )}
-                {pendingMedicines.map((item, idx) => (
-                  <div key={`${item.medicine.id}-${item.time}-${idx}`} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-full bg-blue-50 flex items-center justify-center text-blue-600 font-bold text-sm">
-                        {item.time}
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-gray-900">{item.medicine.name}</h3>
-                        <p className="text-xs text-gray-500">{item.medicine.dosage}</p>
-                        {item.medicine.instructions && (
-                          <p className="text-xs text-gray-400 mt-1">{item.medicine.instructions}</p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Completed Medicines Today */}
-            <div>
-              <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Completed Today</h2>
-              <div className="space-y-3 opacity-60">
-                {completedMedicines.length === 0 && (
-                  <p className="text-gray-400 text-sm italic">No medicines taken yet today.</p>
-                )}
-                {completedMedicines.map((item, idx) => (
-                  <div key={`completed-${item.medicine.id}-${item.time}-${idx}`} className="bg-gray-100 p-4 rounded-2xl flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center text-green-600">
-                        <Check size={20} />
-                      </div>
-                      <div>
-                        <h3 className="font-bold text-gray-600 line-through">{item.medicine.name}</h3>
-                        <p className="text-xs text-gray-400">{item.medicine.dosage} • Taken at {item.time}</p>
-                        {item.medicine.instructions && (
-                          <p className="text-xs text-gray-400 mt-1">{item.medicine.instructions}</p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       {/* Manual Vitals Entry Modal */}
       {showVitalsEntry && onAddVital && (

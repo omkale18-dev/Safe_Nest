@@ -469,17 +469,53 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
               <p className="text-gray-600">Monitoring {senior?.name || 'Senior'}</p>
             </div>
 
-            {/* Connected Device Info (simplified) */}
+            {/* Connected Device Info (with Quick Actions) */}
             {connectedDevice ? (
-              <div className="bg-gradient-to-br from-green-50 to-white border-2 border-green-200 rounded-2xl p-5">
-                <div className="flex items-center gap-2 mb-2">
-                  <Smartphone size={20} className="text-green-600" />
-                  <h3 className="font-bold text-green-900">Device Connected</h3>
-                  <span className="inline-block w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></span>
+              <div className="bg-gradient-to-br from-green-50 to-white border-2 border-green-200 rounded-2xl p-5 space-y-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Smartphone size={20} className="text-green-600" />
+                    <h3 className="font-bold text-green-900">Device Connected</h3>
+                    <span className="inline-block w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></span>
+                  </div>
+                  <p className="text-sm text-green-800 font-semibold">
+                    Last active: {connectedDevice.lastActive ? new Date(connectedDevice.lastActive).toLocaleTimeString() : '—'}
+                  </p>
                 </div>
-                <p className="text-sm text-green-800 font-semibold">
-                  Last active: {connectedDevice.lastActive ? new Date(connectedDevice.lastActive).toLocaleTimeString() : '—'}
-                </p>
+                
+                {/* Quick Actions Grid - Below Device Card */}
+                <div className="grid grid-cols-2 gap-2 pt-3 border-t border-green-200">
+                  {senior && (
+                    <button 
+                      onClick={handleCallSenior}
+                      className="p-3 bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-lg font-semibold hover:from-blue-600 hover:to-blue-700 transition-all flex items-center justify-center gap-2 shadow-md text-sm"
+                    >
+                      <Phone size={16} />
+                      Call
+                    </button>
+                  )}
+                  <button 
+                    onClick={() => setActiveTab('medicine')}
+                    className="p-3 bg-gradient-to-br from-purple-500 to-purple-600 text-white rounded-lg font-semibold hover:from-purple-600 hover:to-purple-700 transition-all flex items-center justify-center gap-2 shadow-md text-sm"
+                  >
+                    <Pill size={16} />
+                    Medicines
+                  </button>
+                  <button 
+                    onClick={() => setActiveTab('appointments')}
+                    className="p-3 bg-gradient-to-br from-teal-500 to-teal-600 text-white rounded-lg font-semibold hover:from-teal-600 hover:to-teal-700 transition-all flex items-center justify-center gap-2 shadow-md text-sm"
+                  >
+                    <Calendar size={16} />
+                    Appointments
+                  </button>
+                  <button 
+                    onClick={() => setActiveTab('safezone')}
+                    className="p-3 bg-gradient-to-br from-green-500 to-green-600 text-white rounded-lg font-semibold hover:from-green-600 hover:to-green-700 transition-all flex items-center justify-center gap-2 shadow-md text-sm"
+                  >
+                    <Shield size={16} />
+                    Safe Zone
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="bg-gray-50 border-2 border-gray-200 rounded-2xl p-5">
@@ -622,64 +658,6 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
               </div>
             )}
 
-            {/* Quick Actions */}
-            <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
-              <h3 className="font-bold text-gray-900 mb-4 flex items-center gap-2">
-                <Home size={20} />
-                Quick Actions
-              </h3>
-              <div className="grid grid-cols-2 gap-3">
-                {senior && (
-                  <button 
-                    onClick={handleCallSenior}
-                    className="p-4 bg-gradient-to-br from-blue-500 to-blue-600 text-white rounded-xl font-semibold hover:from-blue-600 hover:to-blue-700 transition-all flex items-center justify-center gap-2 shadow-md"
-                  >
-                    <Phone size={20} />
-                    Call
-                  </button>
-                )}
-                <button 
-                  onClick={() => setActiveTab('medicine')}
-                  className="p-4 bg-gradient-to-br from-purple-500 to-purple-600 text-white rounded-xl font-semibold hover:from-purple-600 hover:to-purple-700 transition-all flex items-center justify-center gap-2 shadow-md"
-                >
-                  <Pill size={20} />
-                  Medicines
-                </button>
-                <button 
-                  onClick={() => setActiveTab('appointments')}
-                  className="p-4 bg-gradient-to-br from-teal-500 to-teal-600 text-white rounded-xl font-semibold hover:from-teal-600 hover:to-teal-700 transition-all flex items-center justify-center gap-2 shadow-md"
-                >
-                  <Calendar size={20} />
-                  Appointments
-                </button>
-                <button 
-                  onClick={() => setActiveTab('safezone')}
-                  className="p-4 bg-gradient-to-br from-green-500 to-green-600 text-white rounded-xl font-semibold hover:from-green-600 hover:to-green-700 transition-all flex items-center justify-center gap-2 shadow-md"
-                >
-                  <Shield size={20} />
-                  Safe Zone
-                </button>
-              </div>
-              
-              {/* Secondary Actions */}
-              <div className="grid grid-cols-2 gap-3 mt-3">
-                <button 
-                  onClick={() => setActiveTab('map')}
-                  className="p-3 bg-gray-100 text-gray-700 rounded-xl font-medium hover:bg-gray-200 transition-all flex items-center justify-center gap-2"
-                >
-                  <MapIcon size={18} />
-                  Track Location
-                </button>
-                <button 
-                  onClick={() => setActiveTab('settings')}
-                  className="p-3 bg-gray-100 text-gray-700 rounded-xl font-medium hover:bg-gray-200 transition-all flex items-center justify-center gap-2"
-                >
-                  <Settings size={18} />
-                  Settings
-                </button>
-              </div>
-            </div>
-
             {/* Upcoming Medications */}
             {(reminders.length > 0 || medicines.length > 0) && (
               <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
@@ -702,9 +680,12 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
                     return medicine.times.map((time, timeIndex) => {
                       // Check if this medicine dose was taken/skipped/snoozed today
                       const log = medicineLogs.find(
-                        (l) => l.medicineId === medicine.id && 
-                               l.date.toDateString() === today && 
-                               l.scheduledTime === time
+                        (l) => {
+                          const logDate = l.date instanceof Date ? l.date : new Date(l.date);
+                          return l.medicineId === medicine.id && 
+                                 logDate.toDateString() === today && 
+                                 l.scheduledTime === time;
+                        }
                       );
                       const status = log?.status || 'PENDING';
                       

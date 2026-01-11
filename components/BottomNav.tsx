@@ -13,10 +13,11 @@ interface BottomNavProps {
 
 export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, isListening = false, onVoiceClick, className = '', customItems }) => {
   const { t } = useLanguage();
+  
   const navItems = customItems || [
     { id: 'home', icon: Home, label: t.home },
     { id: 'map', icon: Map, label: t.location },
-    { id: 'voice', icon: isListening ? Mic : Sparkles, label: isListening ? t.listening : t.companion },
+    { id: 'voice', icon: Sparkles, label: t.companion },
     { id: 'vitals', icon: Activity, label: t.vitals },
     { id: 'carers', icon: Users, label: t.carers },
     { id: 'settings', icon: Settings, label: t.settings },

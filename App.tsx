@@ -35,8 +35,11 @@ import {
   registerLockScreenSOSHandler,
   cleanupEmergencyShortcuts 
 } from './services/emergencyShortcuts';
-import { sanitizeForLog, getDeviceName } from './utils/sanitize';
+import { sanitizeForLog } from './utils/sanitize';
 import * as googleFitService from './services/googleFit';
+import { isOnline } from './services/network';
+import { offlineStore } from './services/offlineStore';
+import { backgroundReminders } from './services/backgroundReminders';
 
 const normalizePhone = (value: string) => value ? value.replace(/\D/g, '') : '';
 
@@ -305,7 +308,6 @@ const App = () => {
   const fallCountdownTimerRef = useRef<any>(null);
   const voiceDetectorRef = useRef<VoiceEmergencyDetector | null>(null);
   const [isVoiceEmergencyEnabled, setIsVoiceEmergencyEnabled] = useState(false);
-  const [showAlarmPermissionWarning, setShowAlarmPermissionWarning] = useState(false);
 
   const handleLookupCodeByPhone = async (phone: string): Promise<string | null> => {
     const normalized = normalizePhone(phone);
@@ -535,6 +537,23 @@ const App = () => {
     return null;
   };
 
+  const handleFetchSeniorPhoneByCode = async (householdCode: string): Promise<string | null> => {
+    try {
+      await initializeAuth();
+      const membersSnap = await get(ref(db, `households/${householdCode}/members`));
+      if (membersSnap.exists()) {
+        const members = Object.values(membersSnap.val() || {}) as HouseholdMember[];
+        const seniorMember = members.find((m: HouseholdMember) => m.role === UserRole.SENIOR);
+        if (seniorMember && seniorMember.phone) {
+          return seniorMember.phone;
+        }
+      }
+    } catch (e) {
+      console.error('[Fetch Senior Phone Error]', e);
+    }
+    return null;
+  };
+
   const handleHouseholdSet = async (code: string) => {
     setIsValidatingHousehold(true);
     setHouseholdError('');
@@ -545,8 +564,8 @@ const App = () => {
       const cleanCode = code.trim().toUpperCase();
       console.log('[HouseholdSet] Starting with code:', cleanCode, 'role:', role);
       
-      if (!cleanCode || cleanCode.length < 3) {
-        setHouseholdError('Enter a valid code (min 3 characters).');
+      if (!cleanCode || cleanCode.length < 6) {
+        setHouseholdError('Enter a valid code (min 6 characters).');
         return;
       }
 
@@ -558,11 +577,15 @@ const App = () => {
         return;
       }
 
+      // Check if household code already exists
+      const metaSnap = await get(ref(db, `households/${cleanCode}/meta`));
+      const householdExists = metaSnap.exists();
+      console.log('[HouseholdSet] Household exists check:', householdExists);
+
       // If caregiver, auto-create household meta if it doesn't exist (allows caregivers to initialize households)
       if (role === UserRole.CAREGIVER) {
         console.log('[HouseholdSet] Caregiver - checking if household exists...');
-        const metaSnap = await get(ref(db, `households/${cleanCode}/meta`));
-        if (!metaSnap.exists()) {
+        if (!householdExists) {
           console.log('[HouseholdSet] Household not found - creating for caregiver...');
           // Auto-create household meta so caregiver can initialize it
           await set(ref(db, `households/${cleanCode}/meta`), {
@@ -576,25 +599,29 @@ const App = () => {
         }
       }
 
-      // If senior, check if another senior already exists in this household
+      // If senior, check if household code is already taken by another household
       if (role === UserRole.SENIOR) {
         console.log('[HouseholdSet] Senior - checking for existing senior...');
-        const existingMembersSnap = await get(ref(db, `households/${cleanCode}/members`));
-        if (existingMembersSnap.exists()) {
-          const members = Object.values(existingMembersSnap.val() || {}) as HouseholdMember[];
-          const existingSenior = members.find((m: HouseholdMember) => m.role === UserRole.SENIOR);
-          if (existingSenior) {
-            console.log('[HouseholdSet] Found existing senior:', existingSenior.name);
-            // Check if it's the same person
-            const isSamePerson = 
-              (currentUser.phone && normalizePhone(existingSenior.phone) === normalizePhone(currentUser.phone)) ||
-              (currentUser.id && existingSenior.id === currentUser.id);
-            
-            if (!isSamePerson) {
-              setHouseholdError(`A senior (${existingSenior.name}) is already registered with this code. Each household code supports exactly one senior.`);
-              return;
+        
+        // If household exists, check if code is taken by another senior
+        if (householdExists) {
+          const existingMembersSnap = await get(ref(db, `households/${cleanCode}/members`));
+          if (existingMembersSnap.exists()) {
+            const members = Object.values(existingMembersSnap.val() || {}) as HouseholdMember[];
+            const existingSenior = members.find((m: HouseholdMember) => m.role === UserRole.SENIOR);
+            if (existingSenior) {
+              console.log('[HouseholdSet] Found existing senior:', existingSenior.name);
+              // Check if it's the same person
+              const isSamePerson = 
+                (currentUser.phone && normalizePhone(existingSenior.phone) === normalizePhone(currentUser.phone)) ||
+                (currentUser.id && existingSenior.id === currentUser.id);
+              
+              if (!isSamePerson) {
+                setHouseholdError(`This code is already used. Please generate a new unique code.`);
+                return;
+              }
+              console.log('[HouseholdSet] Same senior - allowed');
             }
-            console.log('[HouseholdSet] Same senior - allowed');
           }
         }
         // Create/update meta for senior
@@ -731,6 +758,26 @@ const App = () => {
     const interval = setInterval(checkReminders, 10000); 
     return () => clearInterval(interval);
   }, [reminders, activeReminderId, role]);
+
+  // --- UPDATE LAST ACTIVE TIMESTAMP ---
+  // Update lastActive timestamp every minute for connected seniors
+  useEffect(() => {
+    if (role !== UserRole.SENIOR || !householdId) return;
+
+    const updateLastActive = () => {
+      const deviceRef = ref(db, `households/${householdId}/connectedDevice/lastActive`);
+      set(deviceRef, new Date().toISOString()).catch((err) => {
+        console.error('[UpdateLastActive] Failed:', err);
+      });
+    };
+
+    // Update immediately
+    updateLastActive();
+
+    // Then update every minute
+    const interval = setInterval(updateLastActive, 60000); // 60 seconds
+    return () => clearInterval(interval);
+  }, [role, householdId]);
 
   // --- AUTO-MISSED MEDICINE SCHEDULER ---
   // Automatically mark overdue medicines as MISSED after grace period (runs every minute)
@@ -1324,26 +1371,7 @@ const App = () => {
         if (existingMembersSnap.exists()) {
           const members = Object.values(existingMembersSnap.val() || {}) as HouseholdMember[];
           const existingSenior = members.find((m: HouseholdMember) => m.role === UserRole.SENIOR);
-          if (existingSenior) {
-            console.log('[Rejoin] Found existing senior:', existingSenior);
-            console.log('[Rejoin] Comparing - Profile phone:', profile.phone, 'Existing phone:', existingSenior.phone);
-            console.log('[Rejoin] Comparing - Profile ID:', profile.id, 'Existing ID:', existingSenior.id);
-            
-            // Check if it's the same person (by phone or ID)
-            const isSamePerson = 
-              (profile.phone && normalizePhone(existingSenior.phone) === normalizePhone(profile.phone)) ||
-              (profile.id && existingSenior.id === profile.id);
-            
-            console.log('[Rejoin] Is same person?', isSamePerson);
-            
-            if (!isSamePerson) {
-              console.log('[Rejoin] Different senior trying to join - blocked');
-              setHouseholdError(`A senior (${existingSenior.name}) is already registered with this code. Each household code supports exactly one senior.`);
-              setIsValidatingHousehold(false);
-              return;
-            }
-            console.log('[Rejoin] Same senior rejoining - allowed');
-          }
+         
         }
       }
 
@@ -1657,7 +1685,7 @@ const App = () => {
     if (!householdId || !role) return;
     const registerMember = async () => {
       try {
-        const deviceName = getDeviceName();
+        const deviceName = await getDeviceName();
         const memberData: HouseholdMember = {
           id: currentUser.id || `user-${Date.now()}`,
           name: currentUser.name,
@@ -1665,8 +1693,8 @@ const App = () => {
           avatar: currentUser.avatar,
           phone: currentUser.phone,
           joinedAt: new Date().toISOString(),
-          deviceName: role === UserRole.SENIOR ? deviceName : undefined,
-          lastActiveDevice: deviceName
+          deviceName: deviceName || 'Unknown Device',
+          lastActiveDevice: deviceName || 'Unknown Device'
         };
         await set(ref(db, `households/${householdId}/members/${memberData.id}`), memberData);
         console.log('[Firebase] Member registered with device:', deviceName);
@@ -1800,9 +1828,9 @@ const App = () => {
           console.log('[App] Found', pending.length, 'pending actions to sync');
           
           for (const action of pending) {
-            const { medicineId, scheduledTime, status, timestamp, date } = action;
+            const { medicineId } = action;
             
-            console.log('[App] Syncing action:', status, 'for', medicineId, 'at', scheduledTime);
+            console.log('[App] Syncing action:', action.action, 'for', medicineId);
             
             // Find the medicine
             const medicine = medicines.find(m => m.id === medicineId);
@@ -1811,19 +1839,23 @@ const App = () => {
               continue;
             }
             
+            // Reconstruct scheduled time and date from the medicine info
+            const now = new Date();
+            const today = now.toISOString().split('T')[0];
+            const scheduledTime = medicine.times[0] || '09:00'; // Use first scheduled time
+            
             // Create medicine log entry
-            if (status === 'TAKEN') {
-              const logId = `${medicineId}_${date}_${scheduledTime}`.replace(/:/g, '-');
+            if (action.action === 'taken') {
+              const logId = `${medicineId}_${today}_${scheduledTime}`.replace(/:/g, '-');
               const logEntry: MedicineLog = {
                 id: logId,
                 medicineId: medicineId,
                 medicineName: medicine.name,
                 dosage: medicine.dosage,
                 scheduledTime: scheduledTime,
-                takenTime: new Date(timestamp).toISOString(),
-                date: new Date(date),
+                actualTime: new Date(action.timestamp).toISOString(),
+                date: new Date(today),
                 status: 'TAKEN',
-                takenBy: 'senior',
                 notes: 'Marked from notification'
               };
               
@@ -1833,18 +1865,17 @@ const App = () => {
               });
               
               console.log('[App] ✓ Synced TAKEN action for', medicine.name);
-            } else if (status === 'SKIPPED') {
-              const logId = `${medicineId}_${date}_${scheduledTime}`.replace(/:/g, '-');
+            } else if (action.action === 'skipped') {
+              const logId = `${medicineId}_${today}_${scheduledTime}`.replace(/:/g, '-');
               const logEntry: MedicineLog = {
                 id: logId,
                 medicineId: medicineId,
                 medicineName: medicine.name,
                 dosage: medicine.dosage,
                 scheduledTime: scheduledTime,
-                takenTime: new Date(timestamp).toISOString(),
-                date: new Date(date),
+                actualTime: new Date(action.timestamp).toISOString(),
+                date: new Date(today),
                 status: 'SKIPPED',
-                takenBy: 'senior',
                 notes: 'Skipped from notification'
               };
               
@@ -2255,11 +2286,18 @@ const App = () => {
     const timestamp = new Date();
     const vitalWithId: VitalReading = { ...vital, id: vitalId, timestamp };
     
-    // Prepare for Firebase (convert Date to ISO string)
-    const vitalForDB = {
+    // Prepare for Firebase (convert Date to ISO string, remove undefined values)
+    const vitalForDB: any = {
       ...vitalWithId,
       timestamp: timestamp.toISOString(),
     };
+    
+    // Firebase doesn't accept undefined values, so remove them
+    Object.keys(vitalForDB).forEach(key => {
+      if (vitalForDB[key] === undefined) {
+        delete vitalForDB[key];
+      }
+    });
     
     console.log('[handleAddVital] Writing vital:', vitalForDB);
     set(ref(db, `households/${householdId}/vitals/${vitalId}`), vitalForDB)
@@ -2417,7 +2455,10 @@ const App = () => {
   // Logic to determine if we should show the bottom navigation
   const shouldShowNav = role === UserRole.SENIOR && 
                         appStatus === AppStatus.IDLE && 
-                        !isEditingProfile;
+                        !isEditingProfile &&
+                        !isFirstTime &&
+                        !isJoiningAnother &&
+                        !!householdId;
 
   // Render ONLY the active view (Nav bar is handled separately)
   const renderCurrentView = () => {
@@ -2455,6 +2496,7 @@ const App = () => {
           onLookupCodeByPhone={handleLookupCodeByPhone}
           onSearchCaregiverByPhone={handleSearchCaregiverByPhone}
           onCheckExistingMember={handleCheckExistingMember}
+          onFetchSeniorPhoneByCode={handleFetchSeniorPhoneByCode}
           onValidateHousehold={handleValidateHousehold}
           onCheckPhoneUsed={handleCheckPhoneUsed}
           rejoinError={householdError}
@@ -2546,19 +2588,14 @@ const App = () => {
         return <LocationView status={seniorStatus} seniorProfile={seniorMember} caregivers={caregiverMembers} />;
       case 'voice':
         return (
-            <VoiceCompanionView 
-                userName={currentUser.name} 
-                onSOS={handleSOSClick} 
-                isListening={isListening}
-                onListeningChange={setIsListening}
-                reminders={reminders}
-                activeReminderId={activeReminderId}
-                onUpdateReminder={handleUpdateReminderStatus}
-                medicines={medicines}
-                medicineLogs={medicineLogs}
-                onMarkTaken={handleMarkTaken}
-                onSkipMedicine={handleSkipMedicine}
-            />
+          <VoiceCompanionView 
+            reminders={reminders}
+            medicines={medicines}
+            medicineLogs={medicineLogs}
+            onMarkTaken={handleMarkTaken}
+            onSkipMedicine={handleSkipMedicine}
+            onSnoozeMedicine={handleSkipMedicine}
+          />
         );
       case 'vitals':
         return <VitalsView 
@@ -2599,7 +2636,6 @@ const App = () => {
               isFitConnected={isFitConnected}
               userProfile={currentUser}
               onSignOut={handleSignOut}
-              householdId={householdId}
               onSOSClick={handleSOSClick} 
               onFallSimulation={handleSimulateFall}
               onEditProfile={() => setIsEditingProfile(true)}

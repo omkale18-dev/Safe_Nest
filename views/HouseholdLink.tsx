@@ -24,8 +24,8 @@ export const HouseholdLink: React.FC<HouseholdLinkProps> = ({ role, onSubmit, ex
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const clean = code.trim().toUpperCase();
-    if (!clean || clean.length < 3) {
-      alert('Enter a code (min 3 characters)');
+    if (!clean || clean.length < 6) {
+      alert('Enter a code (min 6 characters)');
       return;
     }
     onSubmit(clean);
