@@ -1,5 +1,5 @@
 import React from 'react';
-import { Home, Map, Activity, Users, Mic, Sparkles, Square, Settings } from 'lucide-react';
+import { Home, Map, Activity, Users, Pill, Settings } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
 
 interface BottomNavProps {
@@ -17,18 +17,14 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, setActiveTab, i
   const navItems = customItems || [
     { id: 'home', icon: Home, label: t.home },
     { id: 'map', icon: Map, label: t.location },
-    { id: 'voice', icon: Sparkles, label: t.companion },
+    { id: 'medicine', icon: Pill, label: 'Medicines' },
     { id: 'vitals', icon: Activity, label: t.vitals },
     { id: 'carers', icon: Users, label: t.carers },
     { id: 'settings', icon: Settings, label: t.settings },
   ];
 
   const handleTabClick = (id: string) => {
-    if (id === 'voice' && onVoiceClick) {
-      onVoiceClick();
-    } else {
-      setActiveTab(id);
-    }
+    setActiveTab(id);
   };
 
   const baseClasses = "fixed bottom-0 left-0 right-0 w-full bg-white border-t border-gray-200 px-4 py-2 flex justify-between items-center pb-[calc(1rem+env(safe-area-inset-bottom))]";

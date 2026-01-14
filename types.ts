@@ -152,6 +152,18 @@ export interface MedicineHistory {
   mostMissedTime?: string; // Time most often missed
 }
 
+// ===== MEDICINE SIDE EFFECTS =====
+export interface SideEffectLog {
+  id: string;
+  householdId: string;
+  medicineId: string;
+  medicineName: string;
+  effect: 'dizziness' | 'nausea' | 'headache' | 'fatigue' | 'dryMouth' | 'other';
+  severity: 'mild' | 'moderate' | 'severe';
+  notes?: string;
+  timestamp: Date;
+}
+
 // ===== HEALTH DATA & VITALS =====
 export interface VitalReading {
   id: string;

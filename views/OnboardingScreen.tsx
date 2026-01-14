@@ -228,7 +228,7 @@ export const OnboardingScreen: React.FC<OnboardingScreenProps> = ({ onComplete }
 
   return (
     <div 
-      className={`min-h-screen w-full bg-gradient-to-br ${slide.bgGradient} flex flex-col transition-all duration-500`}
+      className={`min-h-screen max-h-screen w-full max-w-full bg-gradient-to-br ${slide.bgGradient} flex flex-col transition-all duration-500 overflow-hidden`}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}

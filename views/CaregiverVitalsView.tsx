@@ -1,18 +1,23 @@
 import React, { useState } from 'react';
 import { Heart, Droplet, Thermometer, Gauge, Activity, Plus } from 'lucide-react';
-import { VitalReading } from '../types';
+import { VitalReading, SeniorStatus } from '../types';
 import { ManualVitalsEntry } from './ManualVitalsEntry';
 
 interface CaregiverVitalsViewProps {
   vitalReadings: VitalReading[];
   onAddVital: (vital: Omit<VitalReading, 'id' | 'timestamp'>) => void;
+  seniorStatus?: SeniorStatus;
 }
 
 export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
   vitalReadings,
   onAddVital,
+  seniorStatus,
 }) => {
   const [showVitalsEntry, setShowVitalsEntry] = useState(false);
+
+  // Get daily steps from senior status
+  const dailySteps = seniorStatus?.steps || 0;
 
   // Get latest readings for each vital type
   const getLatestVital = (type: VitalReading['type']) => {
@@ -99,6 +104,39 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
 
           <p className="text-gray-500 text-sm font-medium">
             {latestBP ? 'Latest reading' : 'Add first blood pressure reading'}
+          </p>
+        </div>
+
+        {/* Daily Steps Card */}
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+          <div className="flex justify-between items-start mb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 bg-teal-50 rounded-full flex items-center justify-center">
+                <Activity size={24} className="text-teal-500" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-900 text-lg">Daily Steps</h3>
+                <p className="text-gray-500 text-sm">Today's activity</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex items-end gap-2 mb-2">
+            <span className="text-5xl font-black text-gray-900">{dailySteps.toLocaleString()}</span>
+            <span className="text-gray-500 font-bold mb-1">steps</span>
+          </div>
+
+          <div className="flex items-center justify-between text-sm mb-2">
+            <span className="font-bold text-gray-700">Daily Goal: 5,000 steps</span>
+            <span>{Math.round((dailySteps / 5000) * 100)}%</span>
+          </div>
+
+          <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
+            <div style={{ width: `${Math.min((dailySteps / 5000) * 100, 100)}%` }} className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-teal-400 rounded-full h-full transition-all duration-500"></div>
+          </div>
+
+          <p className="text-gray-500 text-sm font-medium mt-2">
+            {dailySteps < 5000 ? `${(5000 - dailySteps).toLocaleString()} steps to go!` : 'Goal achieved! 🎉'}
           </p>
         </div>
 

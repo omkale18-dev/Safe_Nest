@@ -18,7 +18,23 @@ export const sanitizeForHTML = (input: string): string => {
 
 export const isValidImageUrl = (url: string): boolean => {
   if (!url) return false;
-  return url.startsWith('data:image/') || (url.startsWith('https://') && !url.includes('javascript:'));
+  // Disallow quotes, angle brackets, whitespace to prevent attribute injection
+  if (/["'<>]/.test(url)) return false;
+  if (/\s/.test(url)) return false;
+
+  // Allow only data:image with base64 content
+  if (url.startsWith('data:image/')) {
+    return /^data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/.test(url);
+  }
+
+  // Allow only https URLs, basic validation; disallow javascript schemes hidden in path
+  if (url.startsWith('https://')) {
+    const lower = url.toLowerCase();
+    if (lower.includes('javascript:')) return false;
+    return /^https:\/\/[^\s"'<>()]+$/.test(url);
+  }
+
+  return false;
 };
 
 // Get device name for tracking

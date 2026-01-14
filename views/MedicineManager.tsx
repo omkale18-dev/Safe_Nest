@@ -72,7 +72,7 @@ export const MedicineManager: React.FC<MedicineManagerProps> = ({
     totalQuantity: undefined,
     remainingQuantity: undefined,
     refillAlertThreshold: 7,
-    voiceReminderEnabled: true,
+    voiceReminderEnabled: false,
     isCritical: false,
   });
 
@@ -167,7 +167,7 @@ export const MedicineManager: React.FC<MedicineManagerProps> = ({
       totalQuantity: formData.totalQuantity,
       remainingQuantity: formData.remainingQuantity ?? formData.totalQuantity,
       refillAlertThreshold: formData.refillAlertThreshold || 7,
-      voiceReminderEnabled: formData.voiceReminderEnabled ?? true,
+      voiceReminderEnabled: formData.voiceReminderEnabled ?? false,
       isCritical: formData.isCritical ?? false,
       createdAt: editingId ? new Date(formData.createdAt!) : new Date(),
       updatedAt: new Date(),
@@ -197,7 +197,7 @@ export const MedicineManager: React.FC<MedicineManagerProps> = ({
       totalQuantity: undefined,
       remainingQuantity: undefined,
       refillAlertThreshold: 7,
-      voiceReminderEnabled: true,
+      voiceReminderEnabled: false,
       isCritical: false,
     });
     setShowForm(false);
@@ -460,21 +460,6 @@ export const MedicineManager: React.FC<MedicineManagerProps> = ({
                   />
                 </label>
                 <p className="text-xs text-gray-500 ml-6">Missing this medicine will trigger a louder alert</p>
-
-                {/* Voice Reminder Toggle */}
-                <label className="flex items-center justify-between cursor-pointer">
-                  <div className="flex items-center gap-2">
-                    <Bell size={18} className="text-blue-500" />
-                    <span className="text-sm font-medium text-gray-700">Voice Reminder</span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={formData.voiceReminderEnabled ?? true}
-                    onChange={(e) => setFormData({ ...formData, voiceReminderEnabled: e.target.checked })}
-                    className="w-5 h-5 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                  />
-                </label>
-                <p className="text-xs text-gray-500 ml-6">Speak medicine name when reminder appears</p>
               </div>
             </div>
 
@@ -559,12 +544,6 @@ export const MedicineManager: React.FC<MedicineManagerProps> = ({
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-red-100 text-red-700 text-xs font-bold rounded-full">
                         <AlertCircle size={12} />
                         Critical
-                      </span>
-                    )}
-                    {medicine.voiceReminderEnabled && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-bold rounded-full">
-                        <Bell size={12} />
-                        Voice
                       </span>
                     )}
                   </div>

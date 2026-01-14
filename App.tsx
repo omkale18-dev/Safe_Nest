@@ -13,14 +13,16 @@ import { SettingsView } from './views/SettingsView';
 import { VitalsView } from './views/VitalsView';
 import { VoiceCompanionView } from './views/VoiceCompanionView';
 import { MedicineManager } from './views/MedicineManager';
-import { MedicineReminders } from './views/MedicineReminders';
 import { MedicineCompliance } from './views/MedicineCompliance';
+import { SeniorMedicineSchedule } from './views/SeniorMedicineSchedule';
 import { BottomNav } from './components/BottomNav';
 import { INITIAL_SENIOR_STATUS } from './constants';
 import { useAppSensors } from './hooks/useAppSensors';
+import { useStepCounter } from './hooks/useStepCounter';
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications, PermissionStatus as LNPermissionStatus } from '@capacitor/local-notifications';
 import { FirstTimeSetup } from './views/FirstTimeSetup';
+import { OnboardingScreen } from './views/OnboardingScreen';
 import { db, initializeAuth } from './services/firebase';
 import { ref, set, onValue, off, get } from 'firebase/database';
 import { HouseholdLink } from './views/HouseholdLink';
@@ -36,10 +38,12 @@ import {
   cleanupEmergencyShortcuts 
 } from './services/emergencyShortcuts';
 import { sanitizeForLog } from './utils/sanitize';
+import { logger } from './utils/logger';
 import * as googleFitService from './services/googleFit';
 import { isOnline } from './services/network';
 import { offlineStore } from './services/offlineStore';
-import { backgroundReminders } from './services/backgroundReminders';
+import { medicineNotifications } from './services/medicineNotifications';
+import { geofenceService } from './services/geofenceService';
 
 const normalizePhone = (value: string) => value ? value.replace(/\D/g, '') : '';
 
@@ -181,6 +185,12 @@ const App = () => {
     };
   }, []);
 
+  // Check if user has completed onboarding slides
+  const [showOnboarding, setShowOnboarding] = useState<boolean>(() => {
+    const onboardingComplete = localStorage.getItem('safenest_onboarding_complete');
+    return !onboardingComplete;
+  });
+
   // Check if user has completed setup
   const [isFirstTime, setIsFirstTime] = useState<boolean>(() => {
     const savedProfile = localStorage.getItem('safenest_user_profile');
@@ -304,10 +314,30 @@ const App = () => {
   const [isValidatingHousehold, setIsValidatingHousehold] = useState(false);
   const [isAppInForeground, setIsAppInForeground] = useState(true);
   const [isJoiningAnother, setIsJoiningAnother] = useState(false); // Track if joining another household from caregiver dashboard
-  const [showAlarmPermissionWarning, setShowAlarmPermissionWarning] = useState(false);
   const fallCountdownTimerRef = useRef<any>(null);
   const voiceDetectorRef = useRef<VoiceEmergencyDetector | null>(null);
-  const [isVoiceEmergencyEnabled, setIsVoiceEmergencyEnabled] = useState(false);
+  const [isVoiceEmergencyEnabled, setIsVoiceEmergencyEnabled] = useState(() => {
+    return localStorage.getItem('safenest_voice_emergency') !== 'false';
+  });
+
+  // Helper to get volume threshold based on sensitivity setting
+  const getVolumeThresholdFromSensitivity = (): number => {
+    const sensitivity = localStorage.getItem('safenest_fall_sensitivity') || 'Medium';
+    switch (sensitivity) {
+      case 'Low':
+        return 65; // Less sensitive - only loud shouts
+      case 'High':
+        return 40; // More sensitive - quieter sounds trigger
+      case 'Medium':
+      default:
+        return 50; // Balanced
+    }
+  };
+
+  // Helper to check if voice emergency is enabled from settings
+  const isVoiceEmergencyEnabledFromSettings = (): boolean => {
+    return localStorage.getItem('safenest_voice_emergency') !== 'false';
+  };
 
   const handleLookupCodeByPhone = async (phone: string): Promise<string | null> => {
     const normalized = normalizePhone(phone);
@@ -742,14 +772,18 @@ const App = () => {
                   } else {
                     await LocalNotifications.requestPermissions();
                   }
-                } catch {}
+                } catch (e) {
+                  logger.error('[App] LocalNotifications permission request failed', e);
+                }
               } else if ('Notification' in window && Notification.permission === 'granted') {
                 try {
                   new Notification(`Medication Time: ${dueReminder.title}`, {
                       body: dueReminder.instructions,
                       requireInteraction: true,
                   });
-                } catch(e) {}
+                } catch(e) {
+                  logger.error('[App] Web notification failed', e);
+                }
               }
             })();
         }
@@ -983,7 +1017,7 @@ const App = () => {
   useEffect(() => {
       (async () => {
         if (Capacitor.isNativePlatform()) {
-          try { await LocalNotifications.requestPermissions(); } catch {}
+          try { await LocalNotifications.requestPermissions(); } catch (e) { logger.warn('[App] LocalNotifications init failed', e); }
         } else if ('Notification' in window && Notification.permission !== 'granted') {
           Notification.requestPermission();
         }
@@ -1183,25 +1217,32 @@ const App = () => {
     if (role === UserRole.SENIOR && currentUser.role === UserRole.SENIOR && householdId && seniorStatus.isFallDetectionEnabled) {
       startFallDetection();
       
-      // Also start voice emergency monitoring
-      if (!voiceDetectorRef.current) {
-        voiceDetectorRef.current = new VoiceEmergencyDetector({
-          volumeThreshold: 50,
-          durationMs: 300,
-          onEmergencyDetected: () => {
-            console.log('[App] Voice emergency detected!');
-            setAppStatus(AppStatus.WARNING_FALL);
-            setSeniorStatus(prev => ({ 
-              ...prev, 
-              status: 'Voice Distress Detected',
-              heartRate: 120 
-            }));
-            addActivity('EMERGENCY', 'Voice Distress', 'Loud sound/shout detected');
-          }
-        });
+      // Also start voice emergency monitoring if enabled in settings
+      const voiceEnabled = isVoiceEmergencyEnabledFromSettings();
+      if (voiceEnabled) {
+        const threshold = getVolumeThresholdFromSensitivity();
+        if (!voiceDetectorRef.current) {
+          voiceDetectorRef.current = new VoiceEmergencyDetector({
+            volumeThreshold: threshold,
+            durationMs: 300,
+            onEmergencyDetected: () => {
+              console.log('[App] Voice emergency detected!');
+              setAppStatus(AppStatus.WARNING_FALL);
+              setSeniorStatus(prev => ({ 
+                ...prev, 
+                status: 'Voice Distress Detected',
+                heartRate: 120 
+              }));
+              addActivity('EMERGENCY', 'Voice Distress', 'Loud sound/shout detected');
+            }
+          });
+        } else {
+          // Update threshold if detector exists
+          voiceDetectorRef.current.updateConfig({ volumeThreshold: threshold });
+        }
+        voiceDetectorRef.current.startMonitoring();
+        setIsVoiceEmergencyEnabled(true);
       }
-      voiceDetectorRef.current.startMonitoring();
-      setIsVoiceEmergencyEnabled(true);
       const unsubscribe = subscribeFallDetected(async () => {
         // Use refs to get current values, not stale closure
         const currentEnabled = seniorStatusRef.current.isFallDetectionEnabled;
@@ -1282,6 +1323,19 @@ const App = () => {
        }
     }
   });
+
+  // Use step counter for seniors
+  const { steps: localSteps } = useStepCounter(role === UserRole.SENIOR);
+  
+  // Sync local step counter to seniorStatus for seniors
+  useEffect(() => {
+    if (role === UserRole.SENIOR && localSteps > 0) {
+      setSeniorStatus(prev => ({
+        ...prev,
+        steps: localSteps
+      }));
+    }
+  }, [role, localSteps]);
 
   // Sync Battery
   useEffect(() => {
@@ -1534,45 +1588,13 @@ const App = () => {
             await set(ref(db, `phoneIndex/${normalized}`), householdId);
           }
         }
-      } catch {}
+      } catch (e) {
+        logger.error('[App] Phone index sync failed', e);
+      }
     };
     ensureMeta();
   }, [role, householdId, currentUser.name, currentUser.phone]);
 
-  // Check alarm permissions and schedule medicine reminders for senior
-  useEffect(() => {
-    if (role !== UserRole.SENIOR || medicines.length === 0) return;
-    
-    const checkAndSchedule = async () => {
-      try {
-        // Check if we can schedule exact alarms
-        const canSchedule = await backgroundReminders.canScheduleExactAlarms();
-        console.log('[Medicine] Can schedule exact alarms:', canSchedule);
-        
-        if (!canSchedule) {
-          // Show warning banner if permission is missing
-          setShowAlarmPermissionWarning(true);
-        } else {
-          setShowAlarmPermissionWarning(false);
-        }
-        
-        // Schedule reminders for all medicines
-        console.log('[Medicine] Scheduling reminders for', medicines.length, 'medicines');
-        for (const medicine of medicines) {
-          try {
-            await backgroundReminders.scheduleMedicine(medicine);
-            console.log('[Medicine] Scheduled:', medicine.name);
-          } catch (e) {
-            console.error('[Medicine] Failed to schedule:', medicine.name, e);
-          }
-        }
-      } catch (e) {
-        console.error('[Medicine] Error checking permissions or scheduling:', e);
-      }
-    };
-    
-    checkAndSchedule();
-  }, [role, medicines]);
 
   // Senior device: write status to Firebase when changes occur
   useEffect(() => {
@@ -1685,19 +1707,33 @@ const App = () => {
     if (!householdId || !role) return;
     const registerMember = async () => {
       try {
+        const userId = currentUser.id || `user-${Date.now()}`;
+        const memberRef = ref(db, `households/${householdId}/members/${userId}`);
+        
+        // Check if member already exists to avoid unnecessary writes
+        const existingMember = await get(memberRef);
+        
         const deviceName = await getDeviceName();
         const memberData: HouseholdMember = {
-          id: currentUser.id || `user-${Date.now()}`,
+          id: userId,
           name: currentUser.name,
           role,
           avatar: currentUser.avatar,
           phone: currentUser.phone,
-          joinedAt: new Date().toISOString(),
+          joinedAt: existingMember.exists() ? existingMember.val().joinedAt : new Date().toISOString(),
           deviceName: deviceName || 'Unknown Device',
           lastActiveDevice: deviceName || 'Unknown Device'
         };
-        await set(ref(db, `households/${householdId}/members/${memberData.id}`), memberData);
-        console.log('[Firebase] Member registered with device:', deviceName);
+        
+        // Only write if member doesn't exist or if critical fields changed
+        if (!existingMember.exists() || 
+            existingMember.val().name !== currentUser.name ||
+            existingMember.val().lastActiveDevice !== deviceName) {
+          await set(memberRef, memberData);
+          console.log('[Firebase] Member registered/updated with device:', deviceName);
+        } else {
+          console.log('[Firebase] Member already registered, skipping write');
+        }
       } catch (e) {
         console.error('[Firebase] Failed to register member', e);
       }
@@ -1777,133 +1813,49 @@ const App = () => {
     return () => unsub();
   }, [householdId]);
 
-  // Schedule/reschedule background medicine reminders whenever medicines change
+  // Start geofence monitoring for seniors
   useEffect(() => {
-    if (!backgroundReminders.isAvailable() || medicines.length === 0) return;
-    
-    const scheduleReminders = async () => {
-      // Check alarm permission first
-      const canSchedule = await backgroundReminders.canScheduleExactAlarms();
-      console.log('[App] Can schedule exact alarms:', canSchedule);
-      
-      if (!canSchedule && role === UserRole.SENIOR) {
-        setShowAlarmPermissionWarning(true);
-        console.warn('[App] ⚠️ Exact alarm permission not granted - reminders may not work reliably');
-      }
-      
-      console.log('[App] Scheduling background reminders for', medicines.length, 'medicines');
-      
-      for (const medicine of medicines) {
-        try {
-          console.log(`[App] Scheduling ${medicine.name} with times:`, medicine.times);
-          const success = await backgroundReminders.scheduleMedicine(medicine);
-          console.log(`[App] ${success ? '✓' : '✗'} ${medicine.name}:`, success ? 'scheduled' : 'failed');
-        } catch (error) {
-          console.error('[App] Error scheduling reminders for', medicine.name, ':', error);
-        }
-      }
-      
-      // Verify what's scheduled
-      try {
-        const scheduled = await backgroundReminders.getScheduledReminders();
-        console.log('[App] Total scheduled reminders:', scheduled);
-      } catch (error) {
-        console.error('[App] Error getting scheduled reminders:', error);
-      }
+    if (role !== UserRole.SENIOR || !householdId) return;
+    geofenceService.init(householdId);
+    geofenceService.onEvent((event) => {
+      logger.info('[Geofence] Event', event);
+    });
+    geofenceService.startMonitoring();
+    return () => {
+      geofenceService.stopMonitoring();
     };
-    
-    scheduleReminders();
-  }, [medicines, role]);
+  }, [role, householdId]);
 
-  // Sync pending medicine actions from notification buttons
+  // Schedule medicine notifications when medicines change (Senior only)
   useEffect(() => {
-    if (!householdId || !backgroundReminders.isAvailable()) return;
+    if (role !== UserRole.SENIOR || medicines.length === 0) return;
     
-    const syncPendingActions = async () => {
+    const scheduleNotifications = async () => {
       try {
-        console.log('[App] Checking for pending medicine actions...');
-        const pending = await backgroundReminders.getPendingActions();
-        
-        if (pending && pending.length > 0) {
-          console.log('[App] Found', pending.length, 'pending actions to sync');
-          
-          for (const action of pending) {
-            const { medicineId } = action;
-            
-            console.log('[App] Syncing action:', action.action, 'for', medicineId);
-            
-            // Find the medicine
-            const medicine = medicines.find(m => m.id === medicineId);
-            if (!medicine) {
-              console.warn('[App] Medicine not found:', medicineId);
-              continue;
+        await medicineNotifications.scheduleAllMedicines(medicines);
+        console.log('[App] Medicine notifications scheduled');
+
+        // Also schedule native background reminders on supported Android devices
+        try {
+          const { backgroundReminders } = await import('./services/backgroundReminders');
+          if (backgroundReminders.isAvailable()) {
+            const canExact = await backgroundReminders.canScheduleExactAlarms();
+            if (!canExact) {
+              await backgroundReminders.requestExactAlarmPermission();
             }
-            
-            // Reconstruct scheduled time and date from the medicine info
-            const now = new Date();
-            const today = now.toISOString().split('T')[0];
-            const scheduledTime = medicine.times[0] || '09:00'; // Use first scheduled time
-            
-            // Create medicine log entry
-            if (action.action === 'taken') {
-              const logId = `${medicineId}_${today}_${scheduledTime}`.replace(/:/g, '-');
-              const logEntry: MedicineLog = {
-                id: logId,
-                medicineId: medicineId,
-                medicineName: medicine.name,
-                dosage: medicine.dosage,
-                scheduledTime: scheduledTime,
-                actualTime: new Date(action.timestamp).toISOString(),
-                date: new Date(today),
-                status: 'TAKEN',
-                notes: 'Marked from notification'
-              };
-              
-              await set(ref(db, `households/${householdId}/medicineLogs/${logId}`), {
-                ...logEntry,
-                date: logEntry.date.toISOString(),
-              });
-              
-              console.log('[App] ✓ Synced TAKEN action for', medicine.name);
-            } else if (action.action === 'skipped') {
-              const logId = `${medicineId}_${today}_${scheduledTime}`.replace(/:/g, '-');
-              const logEntry: MedicineLog = {
-                id: logId,
-                medicineId: medicineId,
-                medicineName: medicine.name,
-                dosage: medicine.dosage,
-                scheduledTime: scheduledTime,
-                actualTime: new Date(action.timestamp).toISOString(),
-                date: new Date(today),
-                status: 'SKIPPED',
-                notes: 'Skipped from notification'
-              };
-              
-              await set(ref(db, `households/${householdId}/medicineLogs/${logId}`), {
-                ...logEntry,
-                date: logEntry.date.toISOString(),
-              });
-              
-              console.log('[App] ✓ Synced SKIPPED action for', medicine.name);
-            }
+            await backgroundReminders.scheduleAllMedicines(medicines);
+            console.log('[App] Background reminders scheduled (native)');
           }
-          
-          // Clear pending actions after sync
-          await backgroundReminders.clearPendingActions();
-          console.log('[App] ✓ All pending actions synced and cleared');
+        } catch (err) {
+          console.warn('[App] Background reminders not scheduled:', err);
         }
       } catch (error) {
-        console.error('[App] Error syncing pending actions:', error);
+        console.error('[App] Failed to schedule medicine notifications:', error);
       }
     };
     
-    // Sync on mount and when medicines change
-    syncPendingActions();
-    
-    // Also sync periodically every 30 seconds while app is open
-    const interval = setInterval(syncPendingActions, 30000);
-    return () => clearInterval(interval);
-  }, [householdId, medicines]);
+    scheduleNotifications();
+  }, [role, medicines]);
 
   // Subscribe to medicine logs
   useEffect(() => {
@@ -2350,7 +2302,9 @@ const App = () => {
       localStorage.removeItem('safenest_household_ids');
       localStorage.removeItem('safenest_active_household');
       localStorage.removeItem('safenest_senior_status');
-    } catch {}
+    } catch (e) {
+      logger.error('[App] localStorage cleanup failed', e);
+    }
 
     setRole(null);
     setIsFirstTime(true);
@@ -2406,10 +2360,11 @@ const App = () => {
       
       if (sensor === 'voice') {
         if (enabled) {
-          // Start voice emergency detection
+          // Start voice emergency detection with sensitivity from settings
+          const threshold = getVolumeThresholdFromSensitivity();
           if (!voiceDetectorRef.current) {
             voiceDetectorRef.current = new VoiceEmergencyDetector({
-              volumeThreshold: 50, // dB threshold for shouting (adjustable)
+              volumeThreshold: threshold,
               durationMs: 300, // 300ms of sustained loud sound
               onEmergencyDetected: () => {
                 console.log('[App] Voice emergency detected!');
@@ -2422,10 +2377,14 @@ const App = () => {
                 addActivity('EMERGENCY', 'Voice Distress', 'Loud sound/shout detected');
               }
             });
+          } else {
+            // Update threshold if detector already exists
+            voiceDetectorRef.current.updateConfig({ volumeThreshold: threshold });
           }
           voiceDetectorRef.current.startMonitoring();
           setIsVoiceEmergencyEnabled(true);
-          console.log('[App] Voice emergency monitoring started');
+          localStorage.setItem('safenest_voice_emergency', 'true');
+          console.log('[App] Voice emergency monitoring started with threshold:', threshold);
         } else {
           // Stop voice emergency detection
           if (voiceDetectorRef.current) {
@@ -2433,6 +2392,7 @@ const App = () => {
             console.log('[App] Voice emergency monitoring stopped');
           }
           setIsVoiceEmergencyEnabled(false);
+          localStorage.setItem('safenest_voice_emergency', 'false');
         }
       }
       
@@ -2456,12 +2416,24 @@ const App = () => {
   const shouldShowNav = role === UserRole.SENIOR && 
                         appStatus === AppStatus.IDLE && 
                         !isEditingProfile &&
+                        !showOnboarding &&
                         !isFirstTime &&
                         !isJoiningAnother &&
                         !!householdId;
 
   // Render ONLY the active view (Nav bar is handled separately)
   const renderCurrentView = () => {
+    // Show onboarding slides first
+    if (showOnboarding) {
+      return (
+        <OnboardingScreen 
+          onComplete={() => {
+            setShowOnboarding(false);
+          }}
+        />
+      );
+    }
+
     // Show first-time setup only on initial app load (new user)
     if (isJoiningAnother && role === UserRole.CAREGIVER) {
       return (
@@ -2501,8 +2473,6 @@ const App = () => {
           onCheckPhoneUsed={handleCheckPhoneUsed}
           rejoinError={householdError}
           isValidatingRejoin={isValidatingHousehold}
-          existingProfile={currentUser}
-          existingRole={role}
         />
       );
     }
@@ -2586,15 +2556,14 @@ const App = () => {
         const seniorMember = householdMembers.find(m => m.id === currentUser.id);
         const caregiverMembers = householdMembers.filter(m => m.role === UserRole.CAREGIVER);
         return <LocationView status={seniorStatus} seniorProfile={seniorMember} caregivers={caregiverMembers} />;
-      case 'voice':
+      case 'medicine':
         return (
-          <VoiceCompanionView 
-            reminders={reminders}
+          <SeniorMedicineSchedule 
             medicines={medicines}
             medicineLogs={medicineLogs}
             onMarkTaken={handleMarkTaken}
             onSkipMedicine={handleSkipMedicine}
-            onSnoozeMedicine={handleSkipMedicine}
+            householdId={householdId}
           />
         );
       case 'vitals':
@@ -2655,39 +2624,7 @@ const App = () => {
   };
 
   return (
-    <div className="min-h-screen w-full bg-white flex flex-col font-sans text-gray-900">
-           {/* Alarm Permission Warning Banner - SIMPLIFIED */}
-           {showAlarmPermissionWarning && (
-             <div 
-               className="bg-amber-500 text-white p-4 w-full"
-             >
-               <p className="font-semibold mb-2">⚠️ Medicine reminders may not work</p>
-               <p className="text-xs mb-3 opacity-90">Please enable exact alarms permission in settings.</p>
-               <div className="flex gap-2">
-                 <button
-                   onClick={async () => {
-                     console.log('Button clicked!');
-                     alert('Opening Settings...');
-                     await backgroundReminders.requestExactAlarmPermission();
-                     setTimeout(async () => {
-                       const can = await backgroundReminders.canScheduleExactAlarms();
-                       if (can) setShowAlarmPermissionWarning(false);
-                     }, 2000);
-                   }}
-                   className="bg-white text-amber-600 px-4 py-2 rounded font-medium text-sm"
-                 >
-                   Open Settings
-                 </button>
-                 <button
-                   onClick={() => setShowAlarmPermissionWarning(false)}
-                   className="bg-amber-600 text-white px-4 py-2 rounded font-medium text-sm"
-                 >
-                   Dismiss
-                 </button>
-               </div>
-             </div>
-           )}
-
+    <div className="min-h-screen max-h-screen w-full max-w-full bg-white flex flex-col font-sans text-gray-900 overflow-hidden">
            {/* Scrollable Content Area */}
            <div className="flex-1 overflow-y-auto no-scrollbar flex flex-col bg-white pb-20">
               {renderCurrentView()}

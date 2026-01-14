@@ -17,7 +17,7 @@ interface UseStepCounterReturn {
  */
 export const useStepCounter = (autoStart: boolean = true): UseStepCounterReturn => {
   const [steps, setSteps] = useState<number>(() => stepCounterService.getSteps());
-  const [isTracking, setIsTracking] = useState<boolean>(false);
+  const [isTracking, setIsTracking] = useState<boolean>(() => stepCounterService.isTracking());
 
   useEffect(() => {
     // Subscribe to step changes
@@ -26,9 +26,11 @@ export const useStepCounter = (autoStart: boolean = true): UseStepCounterReturn 
     });
 
     // Auto-start if requested
-    if (autoStart) {
+    if (autoStart && stepCounterService.isSupported()) {
       stepCounterService.startTracking();
-      setIsTracking(true);
+      setIsTracking(stepCounterService.isTracking());
+    } else {
+      setIsTracking(false);
     }
 
     // Cleanup
@@ -41,8 +43,13 @@ export const useStepCounter = (autoStart: boolean = true): UseStepCounterReturn 
   }, [autoStart]);
 
   const handleStartTracking = () => {
+    if (!stepCounterService.isSupported()) {
+      setIsTracking(false);
+      return;
+    }
+
     stepCounterService.startTracking();
-    setIsTracking(true);
+    setIsTracking(stepCounterService.isTracking());
   };
 
   const handleStopTracking = () => {

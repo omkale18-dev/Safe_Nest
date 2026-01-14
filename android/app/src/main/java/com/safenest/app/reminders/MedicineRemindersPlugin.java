@@ -279,91 +279,56 @@ public class MedicineRemindersPlugin extends Plugin {
     @PluginMethod
     public void requestExactAlarmPermission(PluginCall call) {
         Log.d(TAG, "✅ requestExactAlarmPermission called");
-        Log.d(TAG, "Android SDK: " + android.os.Build.VERSION.SDK_INT + ", S = " + android.os.Build.VERSION_CODES.S);
         
         try {
+            Context context = getContext();
+            if (context == null) {
+                Log.e(TAG, "❌ Context is null");
+                call.reject("Context not available");
+                return;
+            }
+            
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                android.app.Activity activity = getActivity();
-                Log.d(TAG, "Activity is null? " + (activity == null));
+                Log.d(TAG, "Android 12+, opening exact alarm settings");
                 
-                if (activity == null) {
-                    Log.e(TAG, "❌ Activity is null, trying with context");
-                    // Try with context if activity not available
+                try {
+                    // Use context.startActivity with NEW_TASK flag since we might not have activity
+                    android.content.Intent intent = new android.content.Intent(
+                        android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                        android.net.Uri.parse("package:" + context.getPackageName())
+                    );
+                    intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
+                    context.startActivity(intent);
+                    Log.d(TAG, "✅ Launched exact alarm settings");
+                    call.resolve();
+                    return;
+                } catch (Exception e) {
+                    Log.e(TAG, "❌ Failed to open exact alarm settings: " + e.getMessage());
+                    
+                    // Fallback to app details
                     try {
                         android.content.Intent intent = new android.content.Intent(
-                            android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
-                            android.net.Uri.parse("package:" + getContext().getPackageName())
+                            android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                            android.net.Uri.parse("package:" + context.getPackageName())
                         );
                         intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK);
-                        getContext().startActivity(intent);
-                        Log.d(TAG, "✅ Opened exact alarm settings from context");
+                        context.startActivity(intent);
+                        Log.d(TAG, "✅ Launched app details settings");
                         call.resolve();
                         return;
-                    } catch (Exception e) {
-                        Log.e(TAG, "❌ Context approach failed: " + e.getMessage());
-                        call.reject("Activity not available and context fallback failed");
+                    } catch (Exception e2) {
+                        Log.e(TAG, "❌ Failed to open app details: " + e2.getMessage());
+                        call.reject("Failed to open settings: " + e2.getMessage());
                         return;
                     }
                 }
-                
-                activity.runOnUiThread(() -> {
-                    Log.d(TAG, "🔵 Running on UI thread...");
-                    boolean launched = false;
-
-                    // Approach 1: ACTION_REQUEST_SCHEDULE_EXACT_ALARM (Android 12+, most direct)
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-                        try {
-                            Log.d(TAG, "Trying ACTION_REQUEST_SCHEDULE_EXACT_ALARM...");
-                            android.content.Intent exactAlarmIntent = new android.content.Intent(
-                                android.provider.Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
-                                android.net.Uri.parse("package:" + getContext().getPackageName())
-                            );
-                            exactAlarmIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                            activity.startActivity(exactAlarmIntent);
-                            Log.d(TAG, "✅ Opened exact alarm permission screen");
-                            launched = true;
-                        } catch (Exception e) {
-                            Log.e(TAG, "❌ ACTION_REQUEST_SCHEDULE_EXACT_ALARM failed: " + e.getMessage(), e);
-                        }
-                    }
-
-                    // Approach 2: Fallback to app details settings
-                    if (!launched) {
-                        try {
-                            Log.d(TAG, "Fallback: Opening app details settings...");
-                            android.content.Intent appSettings = new android.content.Intent(
-                                android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                                android.net.Uri.parse("package:" + getContext().getPackageName())
-                            );
-                            appSettings.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                            activity.startActivity(appSettings);
-                            Log.d(TAG, "✅ Started app settings activity");
-                            launched = true;
-                        } catch (Exception e) {
-                            Log.e(TAG, "❌ Failed to open app settings: " + e.getMessage(), e);
-                        }
-                    }
-
-                    // Approach 3: Last resort - general Settings
-                    if (!launched) {
-                        try {
-                            Log.d(TAG, "Last resort: Opening general Settings...");
-                            android.content.Intent settings = new android.content.Intent(android.provider.Settings.ACTION_SETTINGS);
-                            settings.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK | android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                            activity.startActivity(settings);
-                            Log.d(TAG, "✅ Started general settings");
-                        } catch (Exception e) {
-                            Log.e(TAG, "❌ All approaches failed: " + e.getMessage(), e);
-                        }
-                    }
-                });
             } else {
                 Log.d(TAG, "Android < 12, exact alarms always available");
+                call.resolve();
             }
-            call.resolve();
         } catch (Exception e) {
             Log.e(TAG, "❌ Exception in requestExactAlarmPermission: " + e.getMessage(), e);
-            call.reject("Failed to open settings");
+            call.reject("Failed to open settings: " + e.getMessage());
         }
     }
     

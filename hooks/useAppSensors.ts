@@ -282,9 +282,21 @@ export const useAppSensors = ({
     if (!isMonitoring) return;
 
     // --- 2. Fall Detection (Accelerometer) ---
-    // Slightly higher threshold and require two fast spikes to reduce false positives.
-    const IMPACT_THRESHOLD = 55; // ~5.5G spike
-    const JERK_THRESHOLD = 18;   // change in acceleration between samples
+    // Get sensitivity setting from localStorage
+    const sensitivity = localStorage.getItem('safenest_fall_sensitivity') || 'Medium';
+    
+    // Adjust thresholds based on sensitivity
+    let IMPACT_THRESHOLD = 55; // Medium default ~5.5G
+    let JERK_THRESHOLD = 18;
+    
+    if (sensitivity === 'High') {
+      IMPACT_THRESHOLD = 40; // More sensitive - lower threshold
+      JERK_THRESHOLD = 12;
+    } else if (sensitivity === 'Low') {
+      IMPACT_THRESHOLD = 70; // Less sensitive - higher threshold
+      JERK_THRESHOLD = 25;
+    }
+    
     const IMPACT_WINDOW_MS = 450; // window to accumulate 2 spikes
     const COOLDOWN_MS = 6000;
     let lastTime = 0;

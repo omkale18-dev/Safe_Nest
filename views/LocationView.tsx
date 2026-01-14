@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Settings, Phone, Navigation, Battery, Layers, Map as MapIcon, ChevronUp, ChevronDown } from 'lucide-react';
 import { SeniorStatus, ActivityItem, HouseholdMember, UserRole } from '../types';
 import { sanitizeForLog, sanitizeForHTML, isValidImageUrl } from '../utils/sanitize';
+import { logger } from '../utils/logger';
 
 // Declare Leaflet globally
 declare var L: any;
@@ -58,7 +59,10 @@ export const LocationView: React.FC<LocationViewProps> = ({ status, seniorProfil
       markerRef.current = null;
     }
     if (mapContainerRef.current) {
-      mapContainerRef.current.innerHTML = '';
+      const container = mapContainerRef.current;
+      while (container.firstChild) {
+        container.removeChild(container.firstChild);
+      }
     }
 
     // Initialize with delay to ensure container has proper dimensions
@@ -174,9 +178,9 @@ export const LocationView: React.FC<LocationViewProps> = ({ status, seniorProfil
 
         // Force resize after a bit longer to ensure full layout
         setTimeout(() => {
-          console.log('[LocationView] Calling invalidateSize');
+          logger.debug('[LocationView] Calling invalidateSize');
           map.invalidateSize();
-          console.log('[LocationView] invalidateSize complete, map size:', map.getSize());
+          logger.debug('[LocationView] invalidateSize complete, map size:', map.getSize());
         }, 200);
 
         console.log('[LocationView] Map initialized successfully');

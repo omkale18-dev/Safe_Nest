@@ -2,23 +2,30 @@ import React from 'react';
 import { VitalReading } from '../types';
 
 interface VitalsChartProps {
-  data: VitalReading[];
-  type: 'bloodPressure' | 'heartRate' | 'temperature' | 'weight' | 'bloodSugar';
+  vitalReadings?: VitalReading[];
+  data?: VitalReading[];
+  type?: 'bloodPressure' | 'heartRate' | 'temperature' | 'weight' | 'bloodSugar';
+  period?: 7 | 30;
   days?: 7 | 30;
   showThresholds?: boolean;
 }
 
 export const VitalsChart: React.FC<VitalsChartProps> = ({
+  vitalReadings,
   data,
   type,
-  days = 30,
+  period = 30,
+  days,
   showThresholds = true,
 }) => {
-  // Filter data by type and time period
-  const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-  const filteredData = data
+  // Use vitalReadings if provided, otherwise fall back to data
+  const readings = vitalReadings || data || [];
+  const daysPeriod = days ?? period ?? 30;
+
+  // Filter data by time period
+  const cutoffDate = new Date(Date.now() - daysPeriod * 24 * 60 * 60 * 1000);
+  const filteredData = readings
     .filter((v) => {
-      if (v.type !== type) return false;
       const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
       return vDate >= cutoffDate;
     })
@@ -37,34 +44,78 @@ export const VitalsChart: React.FC<VitalsChartProps> = ({
     );
   }
 
-  // Extract values for chart
-  const values = filteredData.map((v) => {
-    if (type === 'bloodPressure') {
-      const bp = v.value as { systolic: number; diastolic: number };
-      return { sys: bp.systolic, dia: bp.diastolic };
+  // Group data by vital type and day
+  const vitalTypeGroups: { [key: string]: { [key: string]: typeof filteredData } } = {};
+  
+  filteredData.forEach((reading) => {
+    const vitalType = reading.type;
+    const readingDate = reading.timestamp instanceof Date ? reading.timestamp : new Date(reading.timestamp);
+    const dayKey = readingDate.toLocaleDateString('en-US');
+
+    if (!vitalTypeGroups[vitalType]) {
+      vitalTypeGroups[vitalType] = {};
     }
-    return { value: v.value as number };
+    if (!vitalTypeGroups[vitalType][dayKey]) {
+      vitalTypeGroups[vitalType][dayKey] = [];
+    }
+    vitalTypeGroups[vitalType][dayKey].push(reading);
   });
 
-  // Determine thresholds and colors
-  const getThresholds = () => {
-    switch (type) {
-      case 'bloodPressure':
-        return { low: 90, normal: 120, high: 140, max: 180 };
-      case 'heartRate':
-        return { low: 50, normal: 60, high: 100, max: 120 };
-      case 'temperature':
-        return { low: 97, normal: 98.6, high: 100, max: 103 };
-      case 'weight':
-        return { low: 50, normal: 70, high: 90, max: 120 };
-      case 'bloodSugar':
-        return { low: 70, normal: 100, high: 140, max: 200 };
+  // Render separate graphs for each vital type and day
+  return (
+    <div className="space-y-8">
+      {Object.entries(vitalTypeGroups).map(([vitalType, dayData]) => (
+        <div key={vitalType} className="space-y-4">
+          {/* Vital Type Header */}
+          <div className="flex items-center gap-2 sticky top-0 bg-white z-10">
+            <div className="w-1 h-6 bg-blue-600 rounded-full"></div>
+            <h3 className="text-lg font-bold text-gray-900">{getVitalLabel(vitalType as any)}</h3>
+            <span className="ml-auto text-sm text-gray-500 font-medium">{Object.keys(dayData).length} days recorded</span>
+          </div>
+
+          {/* Day-wise charts */}
+          <div className="grid grid-cols-1 gap-4">
+            {Object.entries(dayData)
+              .sort(([dateA], [dateB]) => new Date(dateA).getTime() - new Date(dateB).getTime())
+              .reverse() // Show newest first
+              .map(([dayKey, dayReadings]) => (
+                <DayVitalCard
+                  key={`${vitalType}-${dayKey}`}
+                  vitalType={vitalType as any}
+                  dayKey={dayKey}
+                  readings={dayReadings}
+                  showThresholds={showThresholds}
+                />
+              ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+// Helper component for individual day card
+const DayVitalCard: React.FC<{
+  vitalType: string;
+  dayKey: string;
+  readings: VitalReading[];
+  showThresholds: boolean;
+}> = ({ vitalType, dayKey, readings, showThresholds }) => {
+  const height = 180;
+
+  // Extract values based on vital type
+  const values = readings.map((v) => {
+    if (vitalType === 'bloodPressure') {
+      const bp = v.value as { systolic: number; diastolic: number };
+      return { sys: bp.systolic, dia: bp.diastolic, time: v.timestamp };
     }
-  };
+    return { value: v.value as number, time: v.timestamp };
+  });
 
-  const thresholds = getThresholds();
+  // Determine thresholds
+  const thresholds = getThresholds(vitalType);
 
-  // Calculate min/max for scaling
+  // Calculate min/max
   let minValue = Infinity;
   let maxValue = -Infinity;
 
@@ -78,86 +129,54 @@ export const VitalsChart: React.FC<VitalsChartProps> = ({
     }
   });
 
-  // Add padding to min/max
-  const padding = (maxValue - minValue) * 0.2 || 10; // Fallback padding if range is 0
+  const padding = (maxValue - minValue) * 0.15 || 10;
   minValue = Math.max(0, minValue - padding);
   maxValue = maxValue + padding;
 
-  // Ensure we have a valid range (avoid division by zero)
-  const valueRange = maxValue - minValue;
-  if (valueRange <= 0 || !isFinite(valueRange)) {
-    return (
-      <div className="bg-gray-50 rounded-xl p-8 text-center border border-gray-200">
-        <p className="text-gray-500 font-semibold">Not enough data to display chart</p>
-        <p className="text-sm text-gray-400 mt-1">Add more readings to see trends</p>
-      </div>
-    );
-  }
+  const valueRange = maxValue - minValue || 1;
 
-  // Chart dimensions
-  const width = 100; // percentage
-  const height = 200; // pixels
-  const pointCount = Math.max(filteredData.length, 2); // Ensure at least 2 to avoid division by zero
-
-  // Generate SVG path for line chart
+  // Generate SVG path
   const generatePath = (dataPoints: number[]) => {
     if (dataPoints.length === 0) return '';
-
     const points = dataPoints.map((value, index) => {
-      const x = dataPoints.length === 1 ? 50 : (index / (pointCount - 1)) * 100;
+      const x = dataPoints.length === 1 ? 50 : (index / (dataPoints.length - 1)) * 100;
       const y = Math.max(0, Math.min(100, ((maxValue - value) / valueRange) * 100));
-      // Ensure valid numbers
-      if (!isFinite(x) || !isFinite(y)) return '50,50';
       return `${x},${y}`;
     });
-
-    return `M ${points.join(' L ')}`;
-
     return `M ${points.join(' L ')}`;
   };
 
   const sysValues = values.map((v) => ('sys' in v ? v.sys : v.value));
-  const diaValues = type === 'bloodPressure' ? values.map((v) => ('dia' in v ? v.dia : 0)) : [];
+  const diaValues = vitalType === 'bloodPressure' ? values.map((v) => ('dia' in v ? v.dia : 0)) : [];
 
   const sysPath = generatePath(sysValues);
-  const diaPath = type === 'bloodPressure' ? generatePath(diaValues) : '';
+  const diaPath = vitalType === 'bloodPressure' ? generatePath(diaValues) : '';
 
-  // Format dates for x-axis
-  const formatDate = (timestamp: Date | string) => {
-    const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  };
+  // Get time range
+  const firstTime = new Date(readings[0].timestamp);
+  const lastTime = new Date(readings[readings.length - 1].timestamp);
+  const timeRange = `${firstTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} - ${lastTime.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`;
 
-  const firstDate = formatDate(filteredData[0].timestamp);
-  const lastDate = formatDate(filteredData[filteredData.length - 1].timestamp);
-
-  // Get label
-  const getLabel = () => {
-    switch (type) {
-      case 'bloodPressure':
-        return 'Blood Pressure (mmHg)';
-      case 'heartRate':
-        return 'Heart Rate (BPM)';
-      case 'temperature':
-        return 'Temperature (°F)';
-      case 'weight':
-        return 'Weight (kg)';
-      case 'bloodSugar':
-        return 'Blood Sugar (mg/dL)';
-    }
-  };
+  const latestValue = sysValues[sysValues.length - 1];
+  const latestDia = diaValues.length > 0 ? diaValues[diaValues.length - 1] : 0;
 
   return (
-    <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
+    <div className="bg-white rounded-xl p-4 border border-gray-200 shadow-sm hover:shadow-md transition-shadow">
       {/* Header */}
-      <div className="mb-4">
-        <h4 className="font-bold text-gray-900 text-lg">{getLabel()}</h4>
-        <p className="text-sm text-gray-600 mt-1">
-          Last {days} days • {filteredData.length} readings
-        </p>
+      <div className="flex justify-between items-start mb-3">
+        <div>
+          <p className="text-sm font-bold text-gray-900">{dayKey}</p>
+          <p className="text-xs text-gray-500 mt-0.5">{readings.length} reading{readings.length > 1 ? 's' : ''} • {timeRange}</p>
+        </div>
+        <div className="text-right">
+          <p className="text-2xl font-bold text-blue-600">
+            {vitalType === 'bloodPressure' ? `${Math.round(latestValue)}/${Math.round(latestDia)}` : Math.round(latestValue)}
+          </p>
+          <p className="text-xs text-gray-500 font-medium">{getVitalUnit(vitalType)}</p>
+        </div>
       </div>
 
-      {/* Chart */}
+      {/* Mini Chart */}
       <div className="relative" style={{ height: `${height}px` }}>
         <svg
           viewBox="0 0 100 100"
@@ -165,58 +184,51 @@ export const VitalsChart: React.FC<VitalsChartProps> = ({
           className="w-full h-full"
           style={{ overflow: 'hidden' }}
         >
-          {/* Threshold zones (background) - clipped to visible range */}
+          {/* Threshold zones */}
           {showThresholds && (() => {
-            // Calculate visible zone boundaries, clipped to chart area
             const getY = (val: number) => Math.max(0, Math.min(100, ((maxValue - val) / valueRange) * 100));
-            
-            // Only show zones that intersect with the visible range
             const zones = [];
-            
-            // Danger zone (above max threshold)
+
             if (maxValue > thresholds.max) {
               const y1 = 0;
               const y2 = getY(thresholds.max);
               if (y2 > y1) {
                 zones.push(
-                  <rect key="danger" x="0" y={y1} width="100" height={y2 - y1} fill="#fee2e2" opacity="0.5" />
+                  <rect key="danger" x="0" y={y1} width="100" height={y2 - y1} fill="#fee2e2" opacity="0.4" />
                 );
               }
             }
-            
-            // High/Warning zone (between high and max)
+
             if (maxValue > thresholds.high && minValue < thresholds.max) {
               const y1 = getY(Math.min(maxValue, thresholds.max));
               const y2 = getY(Math.max(minValue, thresholds.high));
               if (y2 > y1) {
                 zones.push(
-                  <rect key="warning" x="0" y={y1} width="100" height={y2 - y1} fill="#fef3c7" opacity="0.5" />
+                  <rect key="warning" x="0" y={y1} width="100" height={y2 - y1} fill="#fef3c7" opacity="0.4" />
                 );
               }
             }
-            
-            // Normal zone (between low and high)
+
             if (maxValue > thresholds.low && minValue < thresholds.high) {
               const y1 = getY(Math.min(maxValue, thresholds.high));
               const y2 = getY(Math.max(minValue, thresholds.low));
               if (y2 > y1) {
                 zones.push(
-                  <rect key="normal" x="0" y={y1} width="100" height={y2 - y1} fill="#d1fae5" opacity="0.5" />
+                  <rect key="normal" x="0" y={y1} width="100" height={y2 - y1} fill="#d1fae5" opacity="0.4" />
                 );
               }
             }
-            
-            // Low zone (below low threshold)
+
             if (minValue < thresholds.low) {
               const y1 = getY(Math.min(maxValue, thresholds.low));
               const y2 = 100;
               if (y2 > y1) {
                 zones.push(
-                  <rect key="low" x="0" y={y1} width="100" height={y2 - y1} fill="#dbeafe" opacity="0.5" />
+                  <rect key="low" x="0" y={y1} width="100" height={y2 - y1} fill="#dbeafe" opacity="0.4" />
                 );
               }
             }
-            
+
             return zones;
           })()}
 
@@ -234,7 +246,7 @@ export const VitalsChart: React.FC<VitalsChartProps> = ({
             />
           ))}
 
-          {/* Systolic line (or main value line) */}
+          {/* Systolic line */}
           <path
             d={sysPath}
             fill="none"
@@ -245,8 +257,8 @@ export const VitalsChart: React.FC<VitalsChartProps> = ({
             strokeLinejoin="round"
           />
 
-          {/* Diastolic line (BP only) */}
-          {type === 'bloodPressure' && (
+          {/* Diastolic line */}
+          {vitalType === 'bloodPressure' && (
             <path
               d={diaPath}
               fill="none"
@@ -260,32 +272,30 @@ export const VitalsChart: React.FC<VitalsChartProps> = ({
 
           {/* Data points */}
           {sysValues.map((value, index) => {
-            const x = sysValues.length === 1 ? 50 : (index / (pointCount - 1)) * 100;
+            const x = sysValues.length === 1 ? 50 : (index / (sysValues.length - 1)) * 100;
             const y = Math.max(0, Math.min(100, ((maxValue - value) / valueRange) * 100));
-            if (!isFinite(x) || !isFinite(y)) return null;
             return (
               <circle
                 key={`sys-${index}`}
                 cx={x}
                 cy={y}
-                r="1.5"
+                r="1.2"
                 fill="#3b82f6"
                 vectorEffect="non-scaling-stroke"
               />
             );
           })}
 
-          {type === 'bloodPressure' &&
+          {vitalType === 'bloodPressure' &&
             diaValues.map((value, index) => {
-              const x = diaValues.length === 1 ? 50 : (index / (pointCount - 1)) * 100;
+              const x = diaValues.length === 1 ? 50 : (index / (diaValues.length - 1)) * 100;
               const y = Math.max(0, Math.min(100, ((maxValue - value) / valueRange) * 100));
-              if (!isFinite(x) || !isFinite(y)) return null;
               return (
                 <circle
                   key={`dia-${index}`}
                   cx={x}
                   cy={y}
-                  r="1.5"
+                  r="1.2"
                   fill="#8b5cf6"
                   vectorEffect="non-scaling-stroke"
                 />
@@ -294,52 +304,90 @@ export const VitalsChart: React.FC<VitalsChartProps> = ({
         </svg>
 
         {/* Y-axis labels */}
-        <div className="absolute left-0 top-0 bottom-0 w-12 flex flex-col justify-between text-xs text-gray-500 font-semibold pr-2">
+        <div className="absolute left-0 top-0 bottom-0 w-10 flex flex-col justify-between text-xs text-gray-500 font-semibold pr-2">
           <span>{Math.round(maxValue)}</span>
           <span>{Math.round((maxValue + minValue) / 2)}</span>
           <span>{Math.round(minValue)}</span>
         </div>
       </div>
 
-      {/* X-axis */}
-      <div className="flex justify-between text-xs text-gray-500 font-semibold mt-2 pl-12">
-        <span>{firstDate}</span>
-        <span>{lastDate}</span>
-      </div>
-
       {/* Legend */}
-      <div className="flex gap-4 mt-4 text-xs font-semibold">
-        {type === 'bloodPressure' ? (
+      <div className="flex gap-4 mt-2 text-xs font-semibold">
+        {vitalType === 'bloodPressure' ? (
           <>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-2 h-2 rounded-full bg-blue-500"></div>
               <span className="text-gray-700">Systolic</span>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="w-3 h-3 rounded-full bg-purple-500"></div>
+            <div className="flex items-center gap-1.5">
+              <div className="w-2 h-2 rounded-full bg-purple-500"></div>
               <span className="text-gray-700">Diastolic</span>
             </div>
           </>
         ) : (
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-blue-500"></div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-blue-500"></div>
             <span className="text-gray-700">Value</span>
           </div>
         )}
       </div>
-
-      {/* Latest value */}
-      <div className="mt-4 bg-blue-50 rounded-xl p-3 border border-blue-200">
-        <p className="text-xs font-bold text-blue-900">Latest Reading</p>
-        <p className="text-2xl font-black text-blue-600 mt-1">
-          {type === 'bloodPressure'
-            ? `${Math.round(sysValues[sysValues.length - 1])}/${Math.round(diaValues[diaValues.length - 1])}`
-            : Math.round(sysValues[sysValues.length - 1])}
-        </p>
-        <p className="text-xs text-blue-800 mt-1">
-          {formatDate(filteredData[filteredData.length - 1].timestamp)}
-        </p>
-      </div>
     </div>
   );
 };
+
+// Helper function to get vital label
+function getVitalLabel(vitalType: 'bloodPressure' | 'heartRate' | 'temperature' | 'weight' | 'bloodSugar'): string {
+  switch (vitalType) {
+    case 'bloodPressure':
+      return 'Blood Pressure';
+    case 'heartRate':
+      return 'Heart Rate';
+    case 'temperature':
+      return 'Temperature';
+    case 'weight':
+      return 'Weight';
+    case 'bloodSugar':
+      return 'Blood Sugar';
+    default:
+      return vitalType;
+  }
+}
+
+// Helper function to get vital unit
+function getVitalUnit(vitalType: string): string {
+  switch (vitalType) {
+    case 'bloodPressure':
+      return 'mmHg';
+    case 'heartRate':
+      return 'BPM';
+    case 'temperature':
+      return '°F';
+    case 'weight':
+      return 'kg';
+    case 'bloodSugar':
+      return 'mg/dL';
+    default:
+      return '';
+  }
+}
+
+// Helper function to get thresholds
+function getThresholds(
+  vitalType: string
+): { low: number; normal: number; high: number; max: number } {
+  switch (vitalType) {
+    case 'bloodPressure':
+      return { low: 90, normal: 120, high: 140, max: 180 };
+    case 'heartRate':
+      return { low: 50, normal: 60, high: 100, max: 120 };
+    case 'temperature':
+      return { low: 97, normal: 98.6, high: 100, max: 103 };
+    case 'weight':
+      return { low: 50, normal: 70, high: 90, max: 120 };
+    case 'bloodSugar':
+      return { low: 70, normal: 100, high: 140, max: 200 };
+    default:
+      return { low: 0, normal: 50, high: 75, max: 100 };
+  }
+}
+

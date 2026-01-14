@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Heart, Activity, MapPin, Zap, LogOut, Mic, Pill, AlertCircle, Plus, Thermometer, Gauge, Check, Clock, Droplets, Scale, Wind } from 'lucide-react';
+import { ActivitySuggestions } from '../components/ActivitySuggestions';
 import { SeniorStatus, UserProfile, Medicine, MedicineLog, VitalReading } from '../types';
 import { ManualVitalsEntry } from './ManualVitalsEntry';
 import { useLanguage } from '../i18n/LanguageContext';
@@ -384,22 +385,22 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
 
           // Check each scheduled time
           medicine.times.forEach((time) => {
+            const normalizeTime = (t: string) => {
+              const parts = t.split(':').map(s => parseInt(s, 10));
+              if (parts.length < 2) return t.trim();
+              return `${parts[0].toString().padStart(2,'0')}:${parts[1].toString().padStart(2,'0')}`;
+            };
             const log = medicineLogs?.find((l) => {
               const logDate = l.date instanceof Date ? l.date : new Date(l.date);
               const logMidnight = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate()).getTime();
-              const normalizeTime = (t: string) => {
-                const parts = t.split(':').map(s => parseInt(s, 10));
-                if (parts.length < 2) return t.trim();
-                return `${parts[0].toString().padStart(2,'0')}:${parts[1].toString().padStart(2,'0')}`;
-              };
               return (
                 l.medicineId === medicine.id &&
                 logMidnight === todayStart &&
-                normalizeTime(l.scheduledTime || '') === normalizeTime(time) &&
-                l.status === 'TAKEN'
+                normalizeTime(l.scheduledTime || '') === normalizeTime(time)
               );
             });
 
+            // If a log exists (TAKEN, MISSED, or SKIPPED), consider it handled
             let status: 'TAKEN' | 'PENDING' | 'OVERDUE' = log ? 'TAKEN' : 'PENDING';
             
             // Check if overdue (time passed + 30 min grace period)
@@ -518,6 +519,9 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
           </div>
         );
       })()}
+
+      {/* Suggestions */}
+      <ActivitySuggestions vitalReadings={vitalReadings} medicineLogs={medicineLogs} />
 
       {/* Vitals */}
       <div>

@@ -10,13 +10,14 @@ import {
   ConfirmationResult,
 } from 'firebase/auth';
 import { auth, app } from './firebase'; // Use shared auth instance
+import { isOnline } from './network';
 
 // Store phone number and confirmation result for verification
 let currentPhoneNumber: string | null = null;
 let confirmationResult: ConfirmationResult | null = null;
 
 // Demo mode - set to true only for testing without SMS
-const USE_DEMO_OTP = true; // Set to false to use Firebase Phone Auth with real SMS
+const USE_DEMO_OTP = false; // Set to false to use Firebase Phone Auth with real SMS
 
 // Cloud Functions base URL for email OTP (SendGrid-backed)
 const projectId = (app as any)?.options?.projectId || 'YOUR_PROJECT_ID';
@@ -24,6 +25,46 @@ const functionsBase = `https://us-central1-${projectId}.cloudfunctions.net`;
 
 // Keep a single invisible reCAPTCHA verifier
 let recaptchaVerifier: RecaptchaVerifier | null = null;
+
+/**
+ * Retry logic with exponential backoff
+ */
+const retryWithBackoff = async <T>(
+  fn: () => Promise<T>,
+  maxAttempts: number = 3,
+  initialDelayMs: number = 1000
+): Promise<T> => {
+  let lastError: any;
+  
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      // Check network before attempting
+      if (!isOnline()) {
+        throw new Error('No internet connection');
+      }
+      
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+      
+      // Don't retry on invalid input errors
+      if (error.code === 'auth/invalid-phone-number' || 
+          error.code === 'auth/invalid-app-credential' ||
+          error.code === 'auth/operation-not-allowed') {
+        throw error;
+      }
+      
+      // Retry on network errors
+      if (attempt < maxAttempts) {
+        const delayMs = initialDelayMs * Math.pow(2, attempt - 1);
+        console.log(`[OTP] Retry attempt ${attempt}/${maxAttempts}, waiting ${delayMs}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  
+  throw lastError;
+};
 
 const ensureRecaptcha = () => {
   if (typeof window === 'undefined') {
@@ -67,6 +108,11 @@ const ensureRecaptcha = () => {
  */
 export const sendPhoneOTP = async (phoneNumber: string): Promise<boolean> => {
   try {
+    // Check network connectivity first
+    if (!isOnline()) {
+      throw new Error('No internet connection. Please check your connection and try again.');
+    }
+
     // Ensure phone number is in E.164 format
     if (!phoneNumber.startsWith('+')) {
       phoneNumber = `+91${phoneNumber}`; // Default to India
@@ -85,8 +131,13 @@ export const sendPhoneOTP = async (phoneNumber: string): Promise<boolean> => {
       return true;
     }
 
+    // Send OTP with retry logic
     const verifier = ensureRecaptcha();
-    confirmationResult = await signInWithPhoneNumber(auth, phoneNumber, verifier);
+    confirmationResult = await retryWithBackoff(
+      () => signInWithPhoneNumber(auth, phoneNumber, verifier),
+      3,
+      1000
+    );
     console.log('[OTP] Firebase signInWithPhoneNumber initiated');
     return true;
   } catch (error: any) {
@@ -95,8 +146,10 @@ export const sendPhoneOTP = async (phoneNumber: string): Promise<boolean> => {
     console.error('[OTP] Error message:', error.message);
     
     // Provide specific error messages
-    if (error.code === 'auth/network-request-failed') {
-      throw new Error('Network error. Please check your internet connection and try again.');
+    if (error.message && error.message.includes('No internet connection')) {
+      throw new Error('No internet connection. Please check your connection and try again.');
+    } else if (error.code === 'auth/network-request-failed') {
+      throw new Error('Network connection failed. Please check your internet connection and try again.');
     } else if (error.code === 'auth/invalid-phone-number') {
       throw new Error('Invalid phone number format. Please check and try again.');
     } else if (error.code === 'auth/too-many-requests') {
@@ -105,6 +158,8 @@ export const sendPhoneOTP = async (phoneNumber: string): Promise<boolean> => {
       throw new Error('Phone authentication is not enabled. Please contact support.');
     } else if (error.code === 'auth/invalid-app-credential') {
       throw new Error('Phone authentication not configured in Firebase. Please enable Phone Auth in Firebase Console.');
+    } else if (error.code === 'auth/captcha-check-failed') {
+      throw new Error('Security verification failed. Please ensure this domain is authorized in Firebase Console (Authentication > Settings > Authorized Domains). If on localhost, add it to the list.');
     }
     
     throw new Error(error.message || 'Failed to send OTP. Please check your phone number and try again.');
@@ -119,6 +174,11 @@ export const sendPhoneOTP = async (phoneNumber: string): Promise<boolean> => {
  */
 export const verifyPhoneOTP = async (code: string, phoneNumber?: string): Promise<boolean> => {
   try {
+    // Check network connectivity
+    if (!isOnline()) {
+      throw new Error('No internet connection. Please check your connection and try again.');
+    }
+
     console.log('[OTP] Verify called with code:', JSON.stringify(code), 'type:', typeof code, 'length:', code?.length);
     
     if (USE_DEMO_OTP) {
@@ -144,7 +204,12 @@ export const verifyPhoneOTP = async (code: string, phoneNumber?: string): Promis
       throw new Error('No OTP request in progress. Please resend the code.');
     }
 
-    await confirmationResult.confirm(code);
+    // Verify with retry logic
+    await retryWithBackoff(
+      () => confirmationResult!.confirm(code),
+      3,
+      1000
+    );
     console.log('[OTP] OTP verified via Firebase');
     // Clear any stored demo values
     if (currentPhoneNumber) {
@@ -154,6 +219,11 @@ export const verifyPhoneOTP = async (code: string, phoneNumber?: string): Promis
     return true;
   } catch (error: any) {
     console.error('[OTP] Verification failed:', error);
+    
+    if (error.message && error.message.includes('No internet connection')) {
+      throw new Error('No internet connection. Please check your connection and try again.');
+    }
+    
     throw new Error(error.message || 'OTP verification failed');
   }
 };
@@ -165,17 +235,29 @@ export const verifyPhoneOTP = async (code: string, phoneNumber?: string): Promis
  */
 export const sendEmailOTP = async (email: string): Promise<boolean> => {
   try {
+    // Check network connectivity
+    if (!isOnline()) {
+      throw new Error('No internet connection. Please check your connection and try again.');
+    }
+
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email)) {
       throw new Error('Invalid email address');
     }
 
     console.log('[OTP] Sending email OTP to:', email);
-    const response = await fetch(`${functionsBase}/sendEmailOTP`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email })
-    });
+    
+    // Send with retry logic
+    const response = await retryWithBackoff(
+      () => fetch(`${functionsBase}/sendEmailOTP`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      }),
+      3,
+      1000
+    );
+    
     if (!response.ok) {
       const text = await response.text();
       throw new Error(text || 'Failed to send email OTP');
@@ -183,6 +265,11 @@ export const sendEmailOTP = async (email: string): Promise<boolean> => {
     return true;
   } catch (error: any) {
     console.error('[OTP] Failed to send email OTP:', error);
+    
+    if (error.message && error.message.includes('No internet connection')) {
+      throw new Error('No internet connection. Please check your connection and try again.');
+    }
+    
     throw new Error(error.message || 'Failed to send email OTP. Please try again');
   }
 };

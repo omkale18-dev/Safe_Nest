@@ -8,6 +8,7 @@ import { CaregiverVitalsView } from './CaregiverVitalsView';
 import { ManualVitalsEntry } from './ManualVitalsEntry';
 import { DoctorAppointmentsView } from './DoctorAppointmentsView';
 import { GeofenceView } from './GeofenceView';
+import { GeofenceAlertsPanel } from '../components/GeofenceAlertsPanel';
 import { ref, set, onValue } from 'firebase/database';
 import { db } from '../services/firebase';
 
@@ -195,9 +196,12 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
         markerRef.current = null;
     }
     
-    // Clear the container
+    // Clear the container without using innerHTML
     if (mapContainerRef.current) {
-        mapContainerRef.current.innerHTML = '';
+      const container = mapContainerRef.current;
+      while (container.firstChild) {
+        container.removeChild(container.firstChild);
+      }
     }
     
     // Initialize map with delay to ensure proper rendering
@@ -526,6 +530,17 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
               </div>
             )}
 
+            {/* Safe Zone Button - Always Visible */}
+            {householdId && (
+              <button 
+                onClick={() => setActiveTab('safezone')}
+                className="w-full p-4 bg-gradient-to-br from-green-500 to-green-600 text-white rounded-2xl font-bold hover:from-green-600 hover:to-green-700 transition-all flex items-center justify-center gap-3 shadow-lg text-lg"
+              >
+                <Shield size={24} />
+                📍 Safe Zone Settings
+              </button>
+            )}
+
             {/* Emergency Status Banner */}
             {isEmergency && (
               <div className="bg-gradient-to-r from-red-500 to-red-600 rounded-2xl p-6 shadow-lg animate-pulse">
@@ -546,6 +561,11 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
                   </button>
                 )}
               </div>
+            )}
+
+            {/* Geofence Location Alerts */}
+            {householdId && (
+              <GeofenceAlertsPanel householdId={householdId} seniorName={senior?.name} />
             )}
 
             {/* Quick Stats Grid */}
@@ -916,6 +936,7 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
           <CaregiverVitalsView 
             vitalReadings={vitalReadings || []}
             onAddVital={onAddVital || (() => {})}
+            seniorStatus={seniorStatus}
           />
       )}
 
@@ -925,6 +946,7 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
             medicines={medicines}
             medicineLogs={medicineLogs}
             vitalReadings={vitalReadings || []}
+            onBack={() => setActiveTab('home')}
           />
       )}
 

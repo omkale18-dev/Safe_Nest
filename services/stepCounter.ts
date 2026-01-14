@@ -13,11 +13,15 @@ class StepCounterService {
   private lastMagnitude: number = 0;
   private lastPeakTime: number = 0;
   private isListening: boolean = false;
+  private motionSupported: boolean = typeof DeviceMotionEvent !== 'undefined';
+  private permissionDenied: boolean = false;
   private peakThreshold: number = 25; // Sensitivity threshold for step detection
   private minStepInterval: number = 300; // Minimum milliseconds between steps (3-4 steps per second max)
   private listeners: ((steps: number) => void)[] = [];
   private workerRegistration: ServiceWorkerRegistration | null = null;
   private port: MessagePort | null = null;
+  private motionHandler: ((event: DeviceMotionEvent) => void) | null = null;
+  private hasLoggedUnsupported: boolean = false;
 
   constructor() {
     this.loadDailySteps();
@@ -141,19 +145,20 @@ class StepCounterService {
 
     this.checkAndResetDaily();
 
+    if (!this.motionSupported) {
+      if (!this.hasLoggedUnsupported) {
+        console.info('[StepCounter] Motion sensors not available; tracking disabled');
+        this.hasLoggedUnsupported = true;
+      }
+      return;
+    }
+
     // Start tracking in service worker
     if (navigator.serviceWorker && navigator.serviceWorker.controller) {
       navigator.serviceWorker.controller.postMessage({
         type: 'START_TRACKING',
       });
       console.log('[StepCounter] Background tracking started via Service Worker');
-    }
-
-    // Also start local tracking for active app
-    // Check for DeviceMotionEvent support
-    if (typeof DeviceMotionEvent === 'undefined') {
-      console.warn('DeviceMotionEvent not supported on this device');
-      return;
     }
 
     // Request permission for iOS 13+
@@ -163,8 +168,10 @@ class StepCounterService {
         .then((permission: string) => {
           if (permission === 'granted') {
             this.attachMotionListener();
+            this.permissionDenied = false;
           } else {
-            console.warn('Motion permission denied');
+            this.permissionDenied = true;
+            console.info('[StepCounter] Motion permission denied');
           }
         })
         .catch((error: Error) => {
@@ -174,14 +181,14 @@ class StepCounterService {
       // For non-iOS devices
       this.attachMotionListener();
     }
-
-    this.isListening = true;
   }
 
   /**
    * Attach the actual motion event listener
    */
   private attachMotionListener(): void {
+    if (this.motionHandler) return;
+
     const handleMotion = (event: DeviceMotionEvent) => {
       const acceleration = event.acceleration;
       if (acceleration) {
@@ -194,7 +201,9 @@ class StepCounterService {
       }
     };
 
+    this.motionHandler = handleMotion;
     window.addEventListener('devicemotion', handleMotion, false);
+    this.isListening = true;
   }
 
   /**
@@ -211,7 +220,10 @@ class StepCounterService {
       console.log('[StepCounter] Background tracking stopped');
     }
 
-    window.removeEventListener('devicemotion', () => {});
+    if (this.motionHandler) {
+      window.removeEventListener('devicemotion', this.motionHandler);
+      this.motionHandler = null;
+    }
     this.isListening = false;
   }
 
@@ -264,6 +276,27 @@ class StepCounterService {
    */
   public getSensitivity(): number {
     return this.peakThreshold;
+  }
+
+  /**
+   * Whether motion sensors are available on this device
+   */
+  public isSupported(): boolean {
+    return this.motionSupported;
+  }
+
+  /**
+   * Whether tracking is currently active
+   */
+  public isTracking(): boolean {
+    return this.isListening;
+  }
+
+  /**
+   * Whether user denied motion permission (iOS)
+   */
+  public isPermissionDenied(): boolean {
+    return this.permissionDenied;
   }
 }
 
