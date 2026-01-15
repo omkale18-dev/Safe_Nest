@@ -2,18 +2,23 @@ package com.safenest.app;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.WindowManager;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 import com.getcapacitor.BridgeActivity;
 import com.safenest.app.falldetection.FallDetectionPlugin;
 import com.safenest.app.falldetection.FallDetectionService;
 import com.safenest.app.fit.GoogleFitPlugin;
 import com.safenest.app.reminders.MedicineRemindersPlugin;
+import com.safenest.app.reminders.MedicineReminderReceiver;
 
 public class MainActivity extends BridgeActivity {
 	private static final String TAG = "MainActivity";
+	private static final int REQUEST_POST_NOTIFICATIONS = 1001;
 	private boolean pendingWidgetSOS = false;
 	
 	@Override
@@ -21,6 +26,13 @@ public class MainActivity extends BridgeActivity {
 		super.onCreate(savedInstanceState);
 		
 		Log.d(TAG, "MainActivity onCreate");
+		
+		// Create notification channels FIRST before registering plugins
+		createNotificationChannels();
+		
+		// Request notification permission on Android 13+
+		requestNotificationPermission();
+		
 		registerPlugin(FallDetectionPlugin.class);
 		registerPlugin(GoogleFitPlugin.class);
 		registerPlugin(MedicineRemindersPlugin.class);
@@ -30,6 +42,38 @@ public class MainActivity extends BridgeActivity {
 		
 		// Always start fall detection service on app launch so background detection is active
 		autoStartFallDetection();
+	}
+	
+	private void createNotificationChannels() {
+		// Create medicine notification channels on app startup
+		MedicineReminderReceiver.createNotificationChannelsStatic(this);
+		Log.d(TAG, "✅ Medicine notification channels created");
+	}
+	
+	private void requestNotificationPermission() {
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+			if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.POST_NOTIFICATIONS) 
+					!= PackageManager.PERMISSION_GRANTED) {
+				Log.d(TAG, "Requesting POST_NOTIFICATIONS permission");
+				ActivityCompat.requestPermissions(this, 
+					new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 
+					REQUEST_POST_NOTIFICATIONS);
+			} else {
+				Log.d(TAG, "POST_NOTIFICATIONS permission already granted");
+			}
+		}
+	}
+	
+	@Override
+	public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+		super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+		if (requestCode == REQUEST_POST_NOTIFICATIONS) {
+			if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+				Log.d(TAG, "✅ POST_NOTIFICATIONS permission granted!");
+			} else {
+				Log.w(TAG, "⚠️ POST_NOTIFICATIONS permission denied!");
+			}
+		}
 	}
 
 	private void autoStartFallDetection() {
@@ -77,9 +121,13 @@ public class MainActivity extends BridgeActivity {
 			}
 		}
 		
-		// Handle SOS widget trigger
-		if (intent != null && intent.getBooleanExtra("triggerSOS", false)) {
-			Log.d(TAG, "SOS triggered from widget!");
+		// Handle SOS widget trigger (check both action string and boolean extra)
+		String action = intent != null ? intent.getAction() : null;
+		boolean isPanicAction = "com.safenest.app.PANIC_SOS".equals(action);
+		boolean isTriggerSOSExtra = intent != null && intent.getBooleanExtra("triggerSOS", false);
+		
+		if (isPanicAction || isTriggerSOSExtra) {
+			Log.d(TAG, "SOS triggered from widget! Action: " + action + ", Extra: " + isTriggerSOSExtra);
 			pendingWidgetSOS = true;
 			
 			// Turn on screen and show over lockscreen

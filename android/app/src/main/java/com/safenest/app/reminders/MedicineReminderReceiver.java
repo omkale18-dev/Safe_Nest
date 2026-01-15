@@ -168,6 +168,13 @@ public class MedicineReminderReceiver extends BroadcastReceiver {
     }
     
     private void createNotificationChannels(Context context) {
+        createNotificationChannelsStatic(context);
+    }
+    
+    /**
+     * Public static method to create notification channels from MainActivity
+     */
+    public static void createNotificationChannelsStatic(Context context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationManager manager = context.getSystemService(NotificationManager.class);
             

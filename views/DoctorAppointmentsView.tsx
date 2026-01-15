@@ -360,16 +360,17 @@ export const DoctorAppointmentsView: React.FC<DoctorAppointmentsViewProps> = ({
 
       {/* Add/Edit Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50">
-          <div className="bg-white w-full max-w-md rounded-t-3xl p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
+        <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50 p-4 pb-24">
+          <div className="bg-white w-full max-w-md rounded-t-3xl h-[90vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between p-6 border-b border-gray-200 flex-shrink-0">
               <h2 className="text-xl font-bold">
                 {editingId ? 'Edit Appointment' : 'Add Appointment'}
               </h2>
               <button onClick={() => { resetForm(); setShowAddModal(false); }} className="text-gray-400 text-2xl">&times;</button>
             </div>
 
-            <div className="space-y-4">
+            <div className="overflow-y-auto flex-1 p-6">
+              <div className="space-y-4">
               <div>
                 <label className="text-sm font-medium text-gray-700">Doctor Name *</label>
                 <input
@@ -510,10 +511,14 @@ export const DoctorAppointmentsView: React.FC<DoctorAppointmentsViewProps> = ({
                 />
               </div>
 
+              </div>
+            </div>
+
+            <div className="border-t border-gray-200 p-4 bg-gray-50 flex-shrink-0 safe-area-inset-bottom">
               <button
                 onClick={handleSubmit}
                 disabled={!doctorName || !date || !time}
-                className="w-full py-4 bg-teal-500 text-white font-bold rounded-xl disabled:opacity-50"
+                className="w-full py-3 bg-teal-500 text-white font-bold rounded-lg disabled:opacity-50 hover:bg-teal-600 transition-colors"
               >
                 {editingId ? 'Update Appointment' : 'Add Appointment'}
               </button>

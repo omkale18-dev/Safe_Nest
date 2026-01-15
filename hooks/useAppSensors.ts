@@ -69,25 +69,34 @@ export const useAppSensors = ({
   // Function to fetch Real Address from OpenStreetMap (Nominatim)
   const fetchRealAddress = async (lat: number, lng: number): Promise<string | null> => {
     try {
-      // Rate Limit: Only fetch if 1.5 seconds passed
+      // Skip geocoding on localhost to avoid CORS errors
+      const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+      if (isLocalhost) {
+        return `${lat.toFixed(4)}, ${lng.toFixed(4)}`; // Just show coordinates in dev
+      }
+      
+      // Rate Limit: Only fetch if 3 seconds passed (Nominatim requires 1 req/sec max)
       const now = Date.now();
-      if (now - lastAddressFetchTime.current < 1500) {
+      if (now - lastAddressFetchTime.current < 3000) {
         return null; // Return null to indicate "keep previous address"
       }
       
       lastAddressFetchTime.current = now;
 
-      // Use dev proxy to avoid CORS in local environment
-      const response = await fetch(
-        `/geocode/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`,
-        {
-          headers: {
-            'Accept-Language': 'en'
-          }
+      // Always use direct URL - no localhost proxy needed
+      const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`;
+      
+      const response = await fetch(url, {
+        headers: {
+          'Accept-Language': 'en',
+          'User-Agent': 'SafeNestApp/1.0' // Required by Nominatim usage policy
         }
-      );
+      });
 
-      if (!response.ok) throw new Error('Geocoding failed');
+      if (!response.ok) {
+        console.warn(`Geocoding HTTP error: ${response.status}`);
+        return null;
+      }
 
       const data = await response.json();
       
@@ -178,14 +187,14 @@ export const useAppSensors = ({
 
           const { latitude, longitude } = pos.coords;
           let currentAddress = locationRef.current?.address || 'Locating...';
-          if (currentAddress === 'Location Sharing Off') currentAddress = 'Locating...';
+          if (currentAddress === 'Location Sharing Off' || currentAddress === 'Loading location...') currentAddress = 'Locating...';
 
           const dist = lastCoords.current ? Math.sqrt(
             Math.pow(latitude - lastCoords.current.lat, 2) +
             Math.pow(longitude - lastCoords.current.lng, 2)
           ) : 100;
 
-          const isPlaceholder = currentAddress === 'Locating...' || currentAddress === 'Initializing GPS...' || currentAddress === 'GPS Signal Weak';
+          const isPlaceholder = currentAddress === 'Locating...' || currentAddress === 'Initializing GPS...' || currentAddress === 'GPS Signal Weak' || currentAddress === 'Loading location...';
           if (dist > 0.0002 || isPlaceholder) {
             const fetchedAddress = await fetchRealAddress(latitude, longitude);
             if (fetchedAddress) {
@@ -215,7 +224,7 @@ export const useAppSensors = ({
         
         // Use ref to get the latest address without stale closure
         let currentAddress = locationRef.current?.address || "Locating...";
-        if (currentAddress === 'Location Sharing Off') currentAddress = "Locating...";
+        if (currentAddress === 'Location Sharing Off' || currentAddress === 'Loading location...') currentAddress = "Locating...";
 
         // Distance check (approx 20 meters)
         const dist = lastCoords.current ? Math.sqrt(
@@ -224,7 +233,7 @@ export const useAppSensors = ({
         ) : 100;
 
         // Fetch if moved significantly OR if we don't have a real address yet
-        const isPlaceholder = currentAddress === "Locating..." || currentAddress === "Initializing GPS..." || currentAddress === "GPS Signal Weak";
+        const isPlaceholder = currentAddress === "Locating..." || currentAddress === "Initializing GPS..." || currentAddress === "GPS Signal Weak" || currentAddress === "Loading location...";
         
         if (dist > 0.0002 || isPlaceholder) {
             const fetchedAddress = await fetchRealAddress(latitude, longitude);
@@ -306,6 +315,7 @@ export const useAppSensors = ({
     let windowStart = 0;
 
     const handleMotion = (event: DeviceMotionEvent) => {
+      // Guard: Check if fall detection is actually enabled
       if (!fallDetectionEnabled) return;
 
       const { x, y, z } = event.accelerationIncludingGravity || { x: 0, y: 0, z: 0 };
@@ -364,7 +374,8 @@ export const useAppSensors = ({
       }
     };
 
-    if (window.DeviceMotionEvent) {
+    // Only attach fall detection listener if fall detection is enabled
+    if (window.DeviceMotionEvent && fallDetectionEnabled) {
       window.addEventListener('devicemotion', handleMotion);
     }
     window.addEventListener('keydown', handleKeyDown);

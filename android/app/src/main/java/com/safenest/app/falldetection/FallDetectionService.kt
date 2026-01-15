@@ -10,31 +10,23 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.IBinder
-import android.os.SharedMemory
 import androidx.core.app.NotificationCompat
 import kotlin.math.sqrt
-import kotlin.math.abs
 
-// Enhanced fall detection with sensor fusion (accelerometer + gyroscope + pressure)
+// Fall detection using accelerometer only (simpler + more stable across devices)
 class FallDetectionService : Service(), SensorEventListener {
     private lateinit var sensorManager: SensorManager
     private var accelSensor: Sensor? = null
-    private var gyroSensor: Sensor? = null
-    private var pressureSensor: Sensor? = null
 
     // Sensitivity levels: LOW, MEDIUM, HIGH
     private var sensitivityLevel = "MEDIUM"
 
     // Thresholds based on sensitivity
     private var impactThreshold = 22.0f // m/s^2
-    private var rotationThreshold = 200.0f // degrees/second
     private var inactivityWindowMs = 2500L
 
     // Sensor data buffers
     private val accelBuffer = FloatArray(3)
-    private val gyroBuffer = FloatArray(3)
-    private var lastPressure = 0f
-    private var pressureDropped = false
 
     private var lastImpactTime = 0L
     private var lastFallTime = 0L
@@ -46,23 +38,15 @@ class FallDetectionService : Service(), SensorEventListener {
         
         // Get all sensors
         accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
-        pressureSensor = sensorManager.getDefaultSensor(Sensor.TYPE_PRESSURE)
 
         // Load sensitivity preference
         loadSensitivityLevel()
         
         startForegroundWithNotification()
         
-        // Register all available sensors
+        // Register accelerometer only
         accelSensor?.also {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-        }
-        gyroSensor?.also {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
-        }
-        pressureSensor?.also {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
         }
     }
 
@@ -96,65 +80,17 @@ class FallDetectionService : Service(), SensorEventListener {
                 if (lastImpactTime != 0L && 
                     (now - lastImpactTime) in 600..inactivityWindowMs &&
                     (now - lastFallTime) > fallCooldownMs) {
-                    
-                    // Additional validation: check if combined with other sensors
-                    if (shouldTriggerFall()) {
-                        lastImpactTime = 0L
-                        lastFallTime = now
-                        notifyFall()
-                        FallDetectionPlugin.notifyFallToJs()
-                    }
+                    lastImpactTime = 0L
+                    lastFallTime = now
+                    notifyFall()
+                    FallDetectionPlugin.notifyFallToJs()
                 }
-            }
-            
-            Sensor.TYPE_GYROSCOPE -> {
-                gyroBuffer[0] = event.values[0]
-                gyroBuffer[1] = event.values[1]
-                gyroBuffer[2] = event.values[2]
-                
-                // Detect abnormal rotation (spinning fall)
-                val rotationMag = sqrt(
-                    gyroBuffer[0] * gyroBuffer[0] +
-                    gyroBuffer[1] * gyroBuffer[1] +
-                    gyroBuffer[2] * gyroBuffer[2]
-                )
-                
-                if (rotationMag > rotationThreshold) {
-                    lastImpactTime = System.currentTimeMillis()
-                }
-            }
-            
-            Sensor.TYPE_PRESSURE -> {
-                // Detect rapid altitude change (falling down)
-                if (lastPressure > 0f) {
-                    val pressureChange = abs(event.values[0] - lastPressure)
-                    if (pressureChange > 5f) { // ~50m altitude change
-                        pressureDropped = true
-                    }
-                }
-                lastPressure = event.values[0]
             }
         }
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
         // No-op
-    }
-    
-    private fun shouldTriggerFall(): Boolean {
-        // Multi-sensor validation
-        val hasAccelImpact = lastImpactTime != 0L
-        val hasRotation = gyroBuffer[0] > 100 || gyroBuffer[1] > 100 || gyroBuffer[2] > 100
-        val hasPressureDrop = pressureDropped
-        
-        pressureDropped = false // Reset after check
-        
-        return when (sensitivityLevel) {
-            "HIGH" -> hasAccelImpact // Very sensitive, any impact + inactivity
-            "MEDIUM" -> hasAccelImpact && (hasRotation || hasPressureDrop) // Impact + additional sensor
-            "LOW" -> hasAccelImpact && (hasRotation && hasPressureDrop) // All sensors must confirm
-            else -> hasAccelImpact
-        }
     }
     
     private fun loadSensitivityLevel() {
@@ -165,7 +101,7 @@ class FallDetectionService : Service(), SensorEventListener {
         impactThreshold = when (sensitivityLevel) {
             "HIGH" -> 15.0f // Very sensitive
             "MEDIUM" -> 22.0f // Standard
-            "LOW" -> 35.0f // Less sensitive
+            "LOW" -> 28.0f // Less sensitive
             else -> 22.0f
         }
     }

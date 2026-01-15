@@ -9,12 +9,34 @@ import type { Medicine } from '../types';
  */
 class MedicineNotificationService {
   private notificationIdBase = 100000; // Base ID for medicine notifications
+  private channelCreated = false;
 
   /**
    * Check if notifications are available
    */
   isAvailable(): boolean {
     return Capacitor.isNativePlatform();
+  }
+
+  /**
+   * Create notification channel for Android
+   */
+  private async createNotificationChannel(): Promise<void> {
+    if (this.channelCreated) return;
+    
+    try {
+      await LocalNotifications.createChannel({
+        id: 'medicine_reminders',
+        name: 'Medicine Reminders',
+        description: 'Notifications for medicine reminders',
+        importance: 5, // High importance
+        sound: 'default',
+      });
+      this.channelCreated = true;
+      console.log('[MedicineNotifications] Notification channel created');
+    } catch (error) {
+      console.warn('[MedicineNotifications] Failed to create channel:', error);
+    }
   }
 
   /**
@@ -39,6 +61,9 @@ class MedicineNotificationService {
     if (!this.isAvailable()) return;
 
     try {
+      // Create notification channel first
+      await this.createNotificationChannel();
+      
       // Request permissions if needed
       const hasPermission = await this.requestPermissions();
       if (!hasPermission) {

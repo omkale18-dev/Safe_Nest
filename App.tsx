@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { UserRole, AppStatus, SeniorStatus, ActivityItem, UserProfile, Reminder, Medicine, MedicineLog, VitalReading } from './types';
+import { UserRole, AppStatus, SeniorStatus, ActivityItem, UserProfile, Reminder, Medicine, MedicineLog, VitalReading, DoctorAppointment } from './types';
 import { SeniorHome } from './views/SeniorHome';
 import { ProfileView } from './views/ProfileView';
 import { FallCountdown } from './views/FallCountdown';
@@ -25,6 +25,7 @@ import { FirstTimeSetup } from './views/FirstTimeSetup';
 import { OnboardingScreen } from './views/OnboardingScreen';
 import { db, initializeAuth } from './services/firebase';
 import { ref, set, onValue, off, get } from 'firebase/database';
+import { backgroundLocationService } from './services/backgroundLocationService';
 import { HouseholdLink } from './views/HouseholdLink';
 import { HouseholdMember, Contact } from './types';
 import { FirebaseMessaging } from '@capacitor-firebase/messaging';
@@ -39,7 +40,6 @@ import {
 } from './services/emergencyShortcuts';
 import { sanitizeForLog } from './utils/sanitize';
 import { logger } from './utils/logger';
-import * as googleFitService from './services/googleFit';
 import { isOnline } from './services/network';
 import { offlineStore } from './services/offlineStore';
 import { medicineNotifications } from './services/medicineNotifications';
@@ -211,6 +211,26 @@ const App = () => {
   const [seniorStatus, setSeniorStatus] = useState<SeniorStatus>(INITIAL_SENIOR_STATUS);
   const [isFitConnected, setIsFitConnected] = useState<boolean>(false);
   
+  // Cleanup old cached steps data on app load
+  useEffect(() => {
+    // Clear old step cache from localStorage to reset from fresh accelerometer data
+    const today = new Date().toDateString();
+    const stepsKey = `steps_${today}`;
+    const oldStepsCached = localStorage.getItem(stepsKey);
+    if (oldStepsCached) {
+      try {
+        const data = JSON.parse(oldStepsCached);
+        // If cached steps look stale or too high (old mock data), reset it
+        if (data.steps > 3000) {
+          localStorage.removeItem(stepsKey);
+          console.log('[App] Cleared stale step cache');
+        }
+      } catch (e) {
+        localStorage.removeItem(stepsKey);
+      }
+    }
+  }, []);
+  
   // Listen for navigation to companion event
   useEffect(() => {
     const handleNavigateToCompanion = () => {
@@ -231,36 +251,6 @@ const App = () => {
   const [activeHouseholdId, setActiveHouseholdId] = useState<string>(() => {
     return localStorage.getItem('safenest_active_household') || '';
   });
-
-
-  // Poll Google Fit for vitals when senior is active and connected
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const hasPerm = await googleFitService.hasPermissions();
-        setIsFitConnected(hasPerm);
-        if (!hasPerm) return;
-        const vitals = await googleFitService.getVitals();
-        if (vitals && !cancelled) {
-          setSeniorStatus(prev => ({ ...prev, steps: vitals.steps, heartRate: vitals.heartRate || prev.heartRate, lastUpdate: new Date(), }));
-        }
-      } catch (e) {
-        console.warn('Google Fit poll failed', e);
-        setIsFitConnected(false);
-      }
-    };
-
-    const interval = setInterval(poll, 30_000);
-    // Do an initial poll
-    poll();
-
-    // Listen for immediate updates from ProfileView/connect flow
-    const handleConnected = () => setIsFitConnected(true);
-    window.addEventListener('googleFitConnected', handleConnected);
-
-    return () => { cancelled = true; clearInterval(interval); window.removeEventListener('googleFitConnected', handleConnected); };
-  }, [role, householdId]);
   
   // Keep seniorStatus ref in sync
   useEffect(() => {
@@ -278,6 +268,11 @@ const App = () => {
   const [allMedicineLogs, setAllMedicineLogs] = useState<{ [householdId: string]: MedicineLog[] }>({});
   const [allMedicines, setAllMedicines] = useState<{ [householdId: string]: Medicine[] }>({});
   const initializedLogsRef = useRef<{ [householdId: string]: boolean }>({});
+  
+  // Doctor Appointments State
+  const [doctorAppointments, setDoctorAppointments] = useState<DoctorAppointment[]>([]);
+  const [allDoctorAppointments, setAllDoctorAppointments] = useState<{ [householdId: string]: DoctorAppointment[] }>({});
+  const initializedAppointmentsRef = useRef<{ [householdId: string]: boolean }>({});
   
   // Vitals State
   const [vitalReadings, setVitalReadings] = useState<VitalReading[]>([]);
@@ -315,9 +310,15 @@ const App = () => {
   const [isAppInForeground, setIsAppInForeground] = useState(true);
   const [isJoiningAnother, setIsJoiningAnother] = useState(false); // Track if joining another household from caregiver dashboard
   const fallCountdownTimerRef = useRef<any>(null);
+  const emergencyDismissalTimeRef = useRef<number>(0); // Prevent rapid re-triggering after dismissal
   const voiceDetectorRef = useRef<VoiceEmergencyDetector | null>(null);
   const [isVoiceEmergencyEnabled, setIsVoiceEmergencyEnabled] = useState(() => {
-    return localStorage.getItem('safenest_voice_emergency') !== 'false';
+    const stored = localStorage.getItem('safenest_voice_emergency');
+    if (stored === null) {
+      localStorage.setItem('safenest_voice_emergency', 'true');
+      return true;
+    }
+    return stored === 'true';
   });
 
   // Helper to get volume threshold based on sensitivity setting
@@ -325,12 +326,12 @@ const App = () => {
     const sensitivity = localStorage.getItem('safenest_fall_sensitivity') || 'Medium';
     switch (sensitivity) {
       case 'Low':
-        return 65; // Less sensitive - only loud shouts
+        return 80; // Less sensitive - only very loud shouts
       case 'High':
-        return 40; // More sensitive - quieter sounds trigger
+        return 70; // More sensitive - loud talking
       case 'Medium':
       default:
-        return 50; // Balanced
+        return 75; // Balanced
     }
   };
 
@@ -338,6 +339,48 @@ const App = () => {
   const isVoiceEmergencyEnabledFromSettings = (): boolean => {
     return localStorage.getItem('safenest_voice_emergency') !== 'false';
   };
+
+  // Monitor voice emergency state and stop detector when disabled
+  useEffect(() => {
+    if (!isVoiceEmergencyEnabled && voiceDetectorRef.current) {
+      console.log('[App] Voice emergency disabled - stopping detector');
+      voiceDetectorRef.current.stopMonitoring();
+    }
+  }, [isVoiceEmergencyEnabled]);
+
+  // Watch localStorage for voice emergency changes from Settings
+  useEffect(() => {
+    const checkVoiceEmergencyStatus = () => {
+      const stored = localStorage.getItem('safenest_voice_emergency');
+      const shouldBeEnabled = stored !== 'false';
+      
+      if (shouldBeEnabled !== isVoiceEmergencyEnabled) {
+        console.log('[App] Voice emergency setting changed in localStorage:', shouldBeEnabled);
+        setIsVoiceEmergencyEnabled(shouldBeEnabled);
+        
+        // Start monitoring if enabled and senior role
+        if (shouldBeEnabled && role === UserRole.SENIOR && !voiceDetectorRef.current?.isMonitoring) {
+          const threshold = getVolumeThresholdFromSensitivity();
+          if (!voiceDetectorRef.current) {
+            voiceDetectorRef.current = new VoiceEmergencyDetector({
+              volumeThreshold: threshold,
+              durationMs: 300,
+              onEmergencyDetected: () => {
+                console.log('[App] Voice emergency detected!');
+                setAppStatus(AppStatus.WARNING_FALL);
+              }
+            });
+          }
+          voiceDetectorRef.current.startMonitoring();
+          console.log('[App] Voice emergency monitoring started from settings change');
+        }
+      }
+    };
+    
+    // Check every 500ms
+    const interval = setInterval(checkVoiceEmergencyStatus, 500);
+    return () => clearInterval(interval);
+  }, [isVoiceEmergencyEnabled, role]);
 
   const handleLookupCodeByPhone = async (phone: string): Promise<string | null> => {
     const normalized = normalizePhone(phone);
@@ -1082,6 +1125,7 @@ const App = () => {
       console.log('[Notification Action]', action);
       const notificationType = action.notification?.extra?.type;
       const notificationId = action.notification?.id;
+      const actionTypeId = action.notification?.actionTypeId;
       
       // Lock screen SOS button
       if (notificationType === 'lock_screen_sos_button' || notificationId === 99999) {
@@ -1090,24 +1134,26 @@ const App = () => {
         addActivity('EMERGENCY', 'SOS Triggered', 'Lock screen button');
         return;
       }
-      
-      if (notificationType === 'fall_detected') {
-        // Clear the countdown timer
-        if (fallCountdownTimerRef.current) {
-          clearTimeout(fallCountdownTimerRef.current);
-          fallCountdownTimerRef.current = null;
-        }
 
+      // Handle FALL_RESPONSE or fall_detected notifications
+      if (notificationType === 'fall_detected' || actionTypeId === 'FALL_RESPONSE' || notificationId === 999) {
+        console.log('[Fall Notification] Action triggered:', { actionId: action.actionId, notificationId });
+        
         // Cancel the notification
-        await LocalNotifications.cancel({ notifications: [{ id: action.notification.id }] });
+        try {
+          await LocalNotifications.cancel({ notifications: [{ id: action.notification.id }] });
+        } catch (e) {
+          console.error('[Fall Notification] Error canceling notification:', e);
+        }
 
         if (action.actionId === 'IM_OK') {
           // User is OK - cancel the fall alert
           console.log('[Fall Response] User is OK');
+          setAppStatus(AppStatus.IDLE);
           addActivity('INFO', 'Fall Alert Cancelled', 'User confirmed they are okay');
-        } else if (action.actionId === 'NEED_HELP' || action.actionId === 'tap') {
-          // User needs help or tapped notification - trigger emergency
-          console.log('[Fall Response] Emergency triggered');
+        } else if (action.actionId === 'NEED_HELP' || !action.actionId) {
+          // User needs help or just tapped the notification (no action specified)
+          console.log('[Fall Response] Emergency triggered from notification');
           setAppStatus(AppStatus.EMERGENCY);
           setSeniorStatus(prev => ({ 
             ...prev, 
@@ -1256,6 +1302,13 @@ const App = () => {
           console.log('[Fall] Ignored - detection is disabled');
           return;
         }
+
+        // Ignore if dismissed recently (prevent infinite loop)
+        const timeSinceDismissal = Date.now() - emergencyDismissalTimeRef.current;
+        if (timeSinceDismissal < 2000) {
+          console.log('[Fall] Ignored - dismissed too recently');
+          return;
+        }
         
         // Clear any existing countdown timer
         if (fallCountdownTimerRef.current) {
@@ -1329,7 +1382,7 @@ const App = () => {
   
   // Sync local step counter to seniorStatus for seniors
   useEffect(() => {
-    if (role === UserRole.SENIOR && localSteps > 0) {
+    if (role === UserRole.SENIOR) {
       setSeniorStatus(prev => ({
         ...prev,
         steps: localSteps
@@ -1368,6 +1421,51 @@ const App = () => {
        }));
     }
   }, [location, appStatus, role]);
+
+  // Send notification with action buttons when fall or SOS is detected
+  useEffect(() => {
+    const sendFallSOSNotification = async () => {
+      if (appStatus !== AppStatus.WARNING_FALL && appStatus !== AppStatus.WARNING_SOS) return;
+      if (!Capacitor.isNativePlatform()) return;
+
+      try {
+        const perm = await LocalNotifications.checkPermissions();
+        if (perm.display !== 'granted') {
+          await LocalNotifications.requestPermissions();
+          return;
+        }
+
+        const notificationTitle = appStatus === AppStatus.WARNING_FALL 
+          ? '📴 Fall Detected!' 
+          : '🆘 SOS Alert!';
+        
+        const notificationBody = appStatus === AppStatus.WARNING_FALL 
+          ? 'Are you okay? Tap to respond.' 
+          : 'Emergency alert triggered.';
+
+        // Schedule notification with action buttons for fall detection
+        await LocalNotifications.schedule({
+          notifications: [{
+            id: appStatus === AppStatus.WARNING_FALL ? 999 : 998,
+            title: notificationTitle,
+            body: notificationBody,
+            sound: 'default',
+            channelId: 'emergency_alerts_v2',
+            actionTypeId: appStatus === AppStatus.WARNING_FALL ? 'FALL_RESPONSE' : 'EMERGENCY',
+            largeBody: appStatus === AppStatus.WARNING_FALL
+              ? 'Tap "I am OK" if you\'re safe, or "Send Alert" if you need help'
+              : 'Emergency alert has been sent to your caregivers',
+            smallIcon: 'ic_stat_name',
+          }]
+        });
+        console.log(`[Notification] ${notificationTitle} notification sent with action buttons`);
+      } catch (err) {
+        console.error('[Notification] Failed to send fall/SOS notification', err);
+      }
+    };
+
+    sendFallSOSNotification();
+  }, [appStatus]);
 
   const handleRoleSelect = (selectedRole: UserRole) => {
     setRole(selectedRole);
@@ -1813,6 +1911,27 @@ const App = () => {
     return () => unsub();
   }, [householdId]);
 
+  // Subscribe to doctor appointments
+  useEffect(() => {
+    if (!householdId) return;
+    const appointmentsRef = ref(db, `households/${householdId}/appointments`);
+    const unsub = onValue(appointmentsRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const appointmentsList = Object.values(data).map((apt: any) => ({
+          ...apt,
+          date: apt.date ? new Date(apt.date) : new Date(),
+          createdAt: apt.createdAt ? new Date(apt.createdAt) : new Date(),
+        })) as DoctorAppointment[];
+        setDoctorAppointments(appointmentsList);
+        console.log('[App] Doctor appointments loaded:', appointmentsList.length);
+      } else {
+        setDoctorAppointments([]);
+      }
+    });
+    return () => unsub();
+  }, [householdId]);
+
   // Start geofence monitoring for seniors
   useEffect(() => {
     if (role !== UserRole.SENIOR || !householdId) return;
@@ -1825,6 +1944,49 @@ const App = () => {
       geofenceService.stopMonitoring();
     };
   }, [role, householdId]);
+
+  // Start background location tracking for seniors (works even when app is closed)
+  useEffect(() => {
+    if (role !== UserRole.SENIOR || !householdId || !seniorStatus.isLocationSharingEnabled) return;
+
+    const startBgLocationTracking = async () => {
+      try {
+        const started = await backgroundLocationService.startBackgroundTracking(
+          (location) => {
+            // Update Firebase with background location
+            if (householdId && currentUser.id) {
+              const statusRef = ref(db, `households/${householdId}/status/location`);
+              set(statusRef, {
+                lat: location.lat,
+                lng: location.lng,
+                address: location.address,
+                updatedAt: new Date().toISOString(),
+              }).catch(err => {
+                console.warn('[BackgroundLocation] Failed to update Firebase:', err);
+              });
+            }
+          },
+          true // enableHighAccuracy
+        );
+
+        if (started) {
+          console.log('[App] Background location tracking started');
+        } else {
+          console.warn('[App] Failed to start background location tracking');
+        }
+      } catch (error) {
+        console.error('[App] Error starting background location:', error);
+      }
+    };
+
+    startBgLocationTracking();
+
+    return () => {
+      backgroundLocationService.stopBackgroundTracking().catch(err => {
+        console.warn('[App] Error stopping background location:', err);
+      });
+    };
+  }, [role, householdId, seniorStatus.isLocationSharingEnabled, currentUser.id]);
 
   // Schedule medicine notifications when medicines change (Senior only)
   useEffect(() => {
@@ -2006,6 +2168,39 @@ const App = () => {
         console.log(`[App] onValue medicines for household ${hId}, count=`, medsList.length);
       });
       unsubscribers.push(() => medsUnsub());
+
+      // Listen to doctor appointments across households for caregivers
+      const appointmentsRef = ref(db, `households/${hId}/appointments`);
+      const appointmentsUnsub = onValue(appointmentsRef, (snapshot) => {
+        const data = snapshot.val();
+        const appointmentsList = data ? Object.values(data).map((apt: any) => ({
+          ...apt,
+          date: apt.date ? new Date(apt.date) : new Date(),
+          createdAt: apt.createdAt ? new Date(apt.createdAt) : new Date(),
+        })) as DoctorAppointment[] : [];
+        const prevLen = (allDoctorAppointments[hId] || []).length;
+        setAllDoctorAppointments(prev => ({ ...prev, [hId]: appointmentsList }));
+        console.log(`[App] onValue appointments for household ${hId}, count=`, appointmentsList.length);
+
+        // Notify senior when caregiver adds appointment in non-active households
+        if (role === UserRole.SENIOR && hId !== householdId) {
+          const initialized = initializedAppointmentsRef.current[hId];
+          if (initialized && appointmentsList.length > prevLen) {
+            const latest = appointmentsList[appointmentsList.length - 1];
+            console.log(`[App] New appointment added for household ${hId}:`, latest);
+            LocalNotifications.schedule({
+              notifications: [{
+                title: '📅 New Appointment',
+                body: `${latest.doctorName} on ${new Date(latest.date).toLocaleDateString()}`,
+                id: Date.now(),
+                schedule: { at: new Date(Date.now() + 100) },
+              }]
+            }).catch(console.error);
+          }
+          initializedAppointmentsRef.current[hId] = true;
+        }
+      });
+      unsubscribers.push(() => appointmentsUnsub());
     });
     
     return () => {
@@ -2074,6 +2269,8 @@ const App = () => {
     setAppStatus(AppStatus.IDLE);
     setSeniorStatus(prev => ({ ...prev, status: 'Normal' }));
     addActivity('INFO', 'Emergency Cancelled', 'Marked safe by user');
+    // Set dismissal timestamp to prevent immediate re-triggering
+    emergencyDismissalTimeRef.current = Date.now();
   }, []);
 
   // Medicine handlers
@@ -2227,6 +2424,75 @@ const App = () => {
       });
   };
 
+  // Doctor Appointments handlers
+  const handleAddAppointment = async (appointment: Omit<DoctorAppointment, 'id' | 'createdAt'>) => {
+    const targetHouseholdId = role === UserRole.CAREGIVER ? (activeHouseholdId || householdId) : householdId;
+    if (!targetHouseholdId) {
+      console.error('[Appointment] No household selected');
+      return;
+    }
+
+    try {
+      const appointmentId = `apt_${Date.now()}`;
+      const appointmentData = {
+        ...appointment,
+        createdAt: new Date().toISOString(),
+        date: appointment.date instanceof Date ? appointment.date.toISOString() : appointment.date,
+      };
+
+      await set(ref(db, `households/${targetHouseholdId}/appointments/${appointmentId}`), appointmentData);
+      console.log('[Appointment] Added successfully:', appointmentId);
+
+      // Notify senior if caregiver added it
+      if (role === UserRole.CAREGIVER) {
+        await LocalNotifications.schedule({
+          notifications: [{
+            title: '📅 New Appointment',
+            body: `Appointment added: ${appointment.doctorName} on ${new Date(appointment.date).toLocaleDateString()}`,
+            id: Date.now(),
+            schedule: { at: new Date(Date.now() + 100) },
+          }]
+        }).catch(console.error);
+      }
+    } catch (e) {
+      console.error('[Appointment] Failed to add:', e);
+    }
+  };
+
+  const handleUpdateAppointment = async (id: string, updates: Partial<DoctorAppointment>) => {
+    const targetHouseholdId = role === UserRole.CAREGIVER ? (activeHouseholdId || householdId) : householdId;
+    if (!targetHouseholdId) {
+      console.error('[Appointment] No household selected');
+      return;
+    }
+
+    try {
+      const appointmentData = {
+        ...updates,
+        date: updates.date instanceof Date ? updates.date.toISOString() : updates.date,
+      };
+      await set(ref(db, `households/${targetHouseholdId}/appointments/${id}`), appointmentData);
+      console.log('[Appointment] Updated successfully:', id);
+    } catch (e) {
+      console.error('[Appointment] Failed to update:', e);
+    }
+  };
+
+  const handleDeleteAppointment = async (id: string) => {
+    const targetHouseholdId = role === UserRole.CAREGIVER ? (activeHouseholdId || householdId) : householdId;
+    if (!targetHouseholdId) {
+      console.error('[Appointment] No household selected');
+      return;
+    }
+
+    try {
+      await set(ref(db, `households/${targetHouseholdId}/appointments/${id}`), null);
+      console.log('[Appointment] Deleted successfully:', id);
+    } catch (e) {
+      console.error('[Appointment] Failed to delete:', e);
+    }
+  };
+
   // Vitals handler
   const handleAddVital = (vital: Omit<VitalReading, 'id' | 'timestamp'>) => {
     if (!householdId) {
@@ -2339,6 +2605,28 @@ const App = () => {
     addActivity('EMERGENCY', 'Emergency Confirmed', 'Alert sent to contacts');
   }, [appStatus]);
 
+  const ensureMicrophonePermission = async (): Promise<boolean> => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      console.warn('[VoiceEmergency] Microphone not available in this environment');
+      return false;
+    }
+
+    let stream: MediaStream | null = null;
+    try {
+      // Request mic access to trigger native permission prompt on mobile
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      return true;
+    } catch (err) {
+      console.warn('[VoiceEmergency] Microphone permission denied', err);
+      alert('Microphone permission is required for Voice Emergency alerts. Please allow access and try again.');
+      return false;
+    } finally {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+    }
+  };
+
   const toggleSensor = async (sensor: 'fall' | 'location' | 'voice', enabled: boolean) => {
       if (sensor === 'fall' && enabled) {
           const granted = await requestMotionPermission();
@@ -2360,6 +2648,13 @@ const App = () => {
       
       if (sensor === 'voice') {
         if (enabled) {
+          const micGranted = await ensureMicrophonePermission();
+          if (!micGranted) {
+            setIsVoiceEmergencyEnabled(false);
+            localStorage.setItem('safenest_voice_emergency', 'false');
+            return;
+          }
+
           // Start voice emergency detection with sensitivity from settings
           const threshold = getVolumeThresholdFromSensitivity();
           if (!voiceDetectorRef.current) {
@@ -2381,7 +2676,12 @@ const App = () => {
             // Update threshold if detector already exists
             voiceDetectorRef.current.updateConfig({ volumeThreshold: threshold });
           }
-          voiceDetectorRef.current.startMonitoring();
+          const started = await voiceDetectorRef.current.startMonitoring();
+          if (!started) {
+            setIsVoiceEmergencyEnabled(false);
+            localStorage.setItem('safenest_voice_emergency', 'false');
+            return;
+          }
           setIsVoiceEmergencyEnabled(true);
           localStorage.setItem('safenest_voice_emergency', 'true');
           console.log('[App] Voice emergency monitoring started with threshold:', threshold);
@@ -2449,6 +2749,7 @@ const App = () => {
           onLookupCodeByPhone={handleLookupCodeByPhone}
           onSearchCaregiverByPhone={handleSearchCaregiverByPhone}
           onCheckExistingMember={handleCheckExistingMember}
+          onFetchSeniorPhoneByCode={handleFetchSeniorPhoneByCode}
           onValidateHousehold={handleValidateHousehold}
           onCheckPhoneUsed={handleCheckPhoneUsed}
           rejoinError={householdError}
@@ -2511,6 +2812,7 @@ const App = () => {
       const caregiverSelectedHouseholdId = activeHouseholdId || householdIds[0] || householdId || '';
       const caregiverLogs = allMedicineLogs[caregiverSelectedHouseholdId] || [];
       const caregiverMeds = allMedicines[caregiverSelectedHouseholdId] || [];
+      const caregiverAppts = allDoctorAppointments[caregiverSelectedHouseholdId] || [];
       console.log('[App] Caregiver render:', {
         selectedHousehold: caregiverSelectedHouseholdId,
         activeHouseholdId,
@@ -2543,6 +2845,10 @@ const App = () => {
             onDeleteMedicine={handleDeleteMedicine}
             vitalReadings={vitalReadings}
             onAddVital={handleAddVital}
+            doctorAppointments={caregiverAppts}
+            onAddAppointment={handleAddAppointment}
+            onUpdateAppointment={handleUpdateAppointment}
+            onDeleteAppointment={handleDeleteAppointment}
         />
       );
     }
@@ -2574,25 +2880,7 @@ const App = () => {
           onAddVital={handleAddVital}
           enteredBy="senior"
           householdId={householdId}
-          onRefresh={async () => {
-            try {
-              const ok = await googleFitService.hasPermissions();
-              setIsFitConnected(ok);
-              if (!ok) {
-                alert('Google Fit is not connected or permissions are missing');
-                return;
-              }
-
-              const vitals = await googleFitService.getVitals();
-              if (vitals) {
-                setSeniorStatus(prev => ({ ...prev, steps: vitals.steps, heartRate: vitals.heartRate || prev.heartRate, lastUpdate: new Date() }));
-              } else {
-                console.warn('No vitals from Google Fit');
-              }
-            } catch (e) {
-              console.error('Sync failed', e);
-            }
-          }} />;
+          onRefresh={undefined} />;
       case 'carers':
         return <ContactsView caregivers={householdMembers.filter(m => m.role === UserRole.CAREGIVER)} contacts={contacts} onAddContact={handleAddContact} />;
       case 'settings':
@@ -2624,9 +2912,9 @@ const App = () => {
   };
 
   return (
-    <div className="min-h-screen max-h-screen w-full max-w-full bg-white flex flex-col font-sans text-gray-900 overflow-hidden">
+    <div className="h-screen w-full max-w-full bg-white flex flex-col font-sans text-gray-900 overflow-hidden">
            {/* Scrollable Content Area */}
-           <div className="flex-1 overflow-y-auto no-scrollbar flex flex-col bg-white pb-20">
+           <div className="flex-1 overflow-y-auto flex flex-col bg-white pb-20">
               {renderCurrentView()}
            </div>
 

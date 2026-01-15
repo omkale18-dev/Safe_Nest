@@ -1,4 +1,5 @@
 import { Capacitor } from '@capacitor/core';
+import { Preferences } from '@capacitor/preferences';
 
 // Minimal plugin interface
 interface FallDetectionPlugin {
@@ -59,4 +60,39 @@ export const subscribeFallDetected = (handler: () => void) => {
 
 export const isFallDetectionAvailable = (): boolean => {
   return plugin !== null;
+};
+
+export const setFallSensitivity = async (level: 'HIGH' | 'MEDIUM' | 'LOW') => {
+  // Save to localStorage for web/UI access
+  localStorage.setItem('fall_detection_sensitivity', level);
+  
+  // Save to Capacitor Preferences (syncs to Android SharedPreferences)
+  if (Capacitor.isNativePlatform()) {
+    try {
+      await Preferences.set({ key: 'fall_detection_sensitivity', value: level });
+      console.log(`[FallDetection] Sensitivity set to ${level}`);
+      
+      // Restart service to apply new sensitivity
+      if (plugin) {
+        await plugin.stop();
+        await plugin.start();
+        console.log('[FallDetection] Service restarted with new sensitivity');
+      }
+    } catch (e) {
+      console.error('[FallDetection] Failed to set sensitivity', e);
+    }
+  }
+};
+
+export const getFallSensitivity = async (): Promise<'HIGH' | 'MEDIUM' | 'LOW'> => {
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const { value } = await Preferences.get({ key: 'fall_detection_sensitivity' });
+      return (value as 'HIGH' | 'MEDIUM' | 'LOW') || 'MEDIUM';
+    } catch (e) {
+      console.error('[FallDetection] Failed to get sensitivity', e);
+      return 'MEDIUM';
+    }
+  }
+  return (localStorage.getItem('fall_detection_sensitivity') as 'HIGH' | 'MEDIUM' | 'LOW') || 'MEDIUM';
 };

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, AlertCircle, Heart, Thermometer, Scale } from 'lucide-react';
+import { X, AlertCircle, Heart, Thermometer, Scale, Activity, Droplet } from 'lucide-react';
 import { VitalReading } from '../types';
 
 interface ManualVitalsEntryProps {
@@ -9,7 +9,7 @@ interface ManualVitalsEntryProps {
 }
 
 export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, onClose, enteredBy }) => {
-  const [activeTab, setActiveTab] = useState<'bloodPressure' | 'temperature' | 'weight' | 'heartRate'>('bloodPressure');
+  const [activeTab, setActiveTab] = useState<'bloodPressure' | 'temperature' | 'weight' | 'heartRate' | 'spo2' | 'bloodSugar'>('bloodPressure');
   const [systolic, setSystolic] = useState('');
   const [diastolic, setDiastolic] = useState('');
   const [temperature, setTemperature] = useState('');
@@ -17,6 +17,8 @@ export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, on
   const [weight, setWeight] = useState('');
   const [weightUnit, setWeightUnit] = useState<'kg' | 'lbs'>('kg');
   const [heartRate, setHeartRate] = useState('');
+  const [spo2, setSpo2] = useState('');
+  const [bloodSugar, setBloodSugar] = useState('');
   const [notes, setNotes] = useState('');
   const [error, setError] = useState('');
 
@@ -137,6 +139,62 @@ export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, on
         enteredBy,
         notes: notes || undefined,
       });
+      
+    } else if (activeTab === 'spo2') {
+      const oxygen = parseInt(spo2);
+      
+      if (!spo2 || isNaN(oxygen)) {
+        setError('Please enter oxygen saturation');
+        return;
+      }
+      
+      if (oxygen < 70 || oxygen > 100) {
+        setError('SpO2 must be between 70-100%');
+        return;
+      }
+      
+      // Warning for low oxygen
+      if (oxygen < 95) {
+        if (!window.confirm('⚠️ Low oxygen saturation detected (<95%). Save anyway?')) {
+          return;
+        }
+      }
+      
+      onSave({
+        type: 'spo2',
+        value: oxygen,
+        source: 'manual',
+        enteredBy,
+        notes: notes || undefined,
+      });
+      
+    } else if (activeTab === 'bloodSugar') {
+      const sugar = parseFloat(bloodSugar);
+      
+      if (!bloodSugar || isNaN(sugar)) {
+        setError('Please enter blood sugar level');
+        return;
+      }
+      
+      if (sugar < 40 || sugar > 400) {
+        setError('Blood sugar must be between 40-400 mg/dL');
+        return;
+      }
+      
+      // Warning for abnormal blood sugar
+      if (sugar < 70 || sugar > 180) {
+        if (!window.confirm('⚠️ Abnormal blood sugar detected (<70 or >180 mg/dL). Save anyway?')) {
+          return;
+        }
+      }
+      
+      onSave({
+        type: 'bloodSugar',
+        value: sugar,
+        source: 'manual',
+        enteredBy,
+        notes: notes || undefined,
+      });
     }
     
     onClose();
@@ -198,6 +256,28 @@ export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, on
           >
             <Heart size={18} />
             HR
+          </button>
+          <button
+            onClick={() => setActiveTab('spo2')}
+            className={`flex items-center gap-2 px-4 py-3 font-semibold transition-colors ${
+              activeTab === 'spo2'
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Activity size={18} />
+            SpO₂
+          </button>
+          <button
+            onClick={() => setActiveTab('bloodSugar')}
+            className={`flex items-center gap-2 px-4 py-3 font-semibold transition-colors ${
+              activeTab === 'bloodSugar'
+                ? 'text-blue-600 border-b-2 border-blue-600'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            <Droplet size={18} />
+            Sugar
           </button>
         </div>
 
@@ -333,6 +413,55 @@ export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, on
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
                 <p className="text-xs text-blue-800">
                   <strong>Normal (Resting):</strong> 60-100 bpm • <strong>Elevated:</strong> &gt;100 bpm • <strong>Low:</strong> &lt;60 bpm
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* SpO2 (Oxygen Saturation) */}
+          {activeTab === 'spo2' && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-2">Oxygen Saturation (SpO₂)</label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    value={spo2}
+                    onChange={(e) => setSpo2(e.target.value)}
+                    placeholder="98"
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none text-lg font-semibold"
+                  />
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">%</span>
+                </div>
+              </div>
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                <p className="text-xs text-blue-800">
+                  <strong>Normal:</strong> 95-100% • <strong>Low:</strong> &lt;95% • <strong>Critical:</strong> &lt;90%
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Blood Sugar */}
+          {activeTab === 'bloodSugar' && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-gray-700 mb-2">Blood Sugar (Glucose)</label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={bloodSugar}
+                    onChange={(e) => setBloodSugar(e.target.value)}
+                    placeholder="100"
+                    className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none text-lg font-semibold"
+                  />
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">mg/dL</span>
+                </div>
+              </div>
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                <p className="text-xs text-blue-800">
+                  <strong>Normal (Fasting):</strong> 70-100 mg/dL • <strong>Pre-Diabetes:</strong> 100-125 • <strong>High:</strong> &gt;180
                 </p>
               </div>
             </div>

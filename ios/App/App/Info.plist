@@ -47,5 +47,7 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>SafeNest uses the microphone to detect voice emergencies like shouts for help.</string>
 </dict>
 </plist>

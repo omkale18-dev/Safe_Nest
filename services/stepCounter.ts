@@ -15,8 +15,8 @@ class StepCounterService {
   private isListening: boolean = false;
   private motionSupported: boolean = typeof DeviceMotionEvent !== 'undefined';
   private permissionDenied: boolean = false;
-  private peakThreshold: number = 25; // Sensitivity threshold for step detection
-  private minStepInterval: number = 300; // Minimum milliseconds between steps (3-4 steps per second max)
+  private peakThreshold: number = 15; // Sensitivity threshold for step detection (lowered for better detection)
+  private minStepInterval: number = 250; // Minimum milliseconds between steps (allows faster walking)
   private listeners: ((steps: number) => void)[] = [];
   private workerRegistration: ServiceWorkerRegistration | null = null;
   private port: MessagePort | null = null;
@@ -116,11 +116,14 @@ class StepCounterService {
 
     // Check if enough time has passed since last step (debouncing)
     if (now - this.lastPeakTime < this.minStepInterval) {
+      this.lastMagnitude = magnitude;
       return;
     }
 
     // Detect peak in acceleration (indicates footfall)
-    if (magnitude > this.peakThreshold && magnitude > this.lastMagnitude) {
+    // More lenient detection: check if magnitude exceeds threshold
+    const delta = magnitude - this.lastMagnitude;
+    if (magnitude > this.peakThreshold || (delta > 5 && magnitude > 10)) {
       this.lastPeakTime = now;
       this.steps++;
       this.saveDailySteps();
@@ -171,14 +174,18 @@ class StepCounterService {
             this.permissionDenied = false;
           } else {
             this.permissionDenied = true;
-            console.info('[StepCounter] Motion permission denied');
+            console.warn('[StepCounter] Motion permission denied - step tracking disabled');
+            // Fallback: still try to attach listener for Android devices
+            this.attachMotionListener();
           }
         })
         .catch((error: Error) => {
-          console.warn('Error requesting motion permission:', error);
+          console.warn('[StepCounter] Error requesting motion permission:', error);
+          // Still try to attach listener
+          this.attachMotionListener();
         });
     } else {
-      // For non-iOS devices
+      // For non-iOS devices (Android, etc.)
       this.attachMotionListener();
     }
   }

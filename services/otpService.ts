@@ -17,7 +17,7 @@ let currentPhoneNumber: string | null = null;
 let confirmationResult: ConfirmationResult | null = null;
 
 // Demo mode - set to true only for testing without SMS
-const USE_DEMO_OTP = false; // Set to false to use Firebase Phone Auth with real SMS
+const USE_DEMO_OTP = true; // Set to false to use Firebase Phone Auth with real SMS
 
 // Cloud Functions base URL for email OTP (SendGrid-backed)
 const projectId = (app as any)?.options?.projectId || 'YOUR_PROJECT_ID';

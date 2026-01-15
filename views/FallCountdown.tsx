@@ -9,6 +9,9 @@ interface FallCountdownProps {
 
 export const FallCountdown: React.FC<FallCountdownProps> = ({ onCancel, onConfirm }) => {
   
+  // Get auto-SOS timer setting from localStorage (default: 15 seconds)
+  const autoSOSTimer = parseInt(localStorage.getItem('safenest_auto_sos_timer') || '15');
+  
   // Auditory Alert Effect
   useEffect(() => {
     let interval: any;
@@ -69,7 +72,7 @@ export const FallCountdown: React.FC<FallCountdownProps> = ({ onCancel, onConfir
         </div>
 
         <CircularTimer 
-          seconds={10} 
+          seconds={autoSOSTimer} 
           onComplete={onConfirm} 
           isActive={true} 
           color="text-red-500" 

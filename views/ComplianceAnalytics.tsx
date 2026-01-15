@@ -210,35 +210,369 @@ export const ComplianceAnalytics: React.FC<ComplianceAnalyticsProps> = ({
         day: 'numeric',
       });
 
-      // Simple text-based report
-      const content = `SAFENEST HEALTH REPORT
-Generated: ${reportDate}
+      // Get all medicine compliance data (not just last 7 days)
+      const allComplianceLogs = medicineLogs.filter(log => log.status === 'taken' || log.status === 'missed');
+      const totalTaken = allComplianceLogs.filter(log => log.status === 'taken').length;
+      const totalMissed = allComplianceLogs.filter(log => log.status === 'missed').length;
+      const totalCompliance = allComplianceLogs.length > 0 
+        ? Math.round((totalTaken / allComplianceLogs.length) * 100) 
+        : 0;
 
-OVERALL HEALTH RISK: ${healthAnalysis.riskScore.overall}/100
-Status: ${healthAnalysis.riskScore.overall >= 70 ? 'HIGH RISK' : healthAnalysis.riskScore.overall >= 40 ? 'MODERATE RISK' : 'LOW RISK'}
+      // Format all vitals data by type
+      const formatVitalsData = (type: VitalReading['type'], label: string, unit: string) => {
+        const readings = vitalReadings.filter(v => v.type === type).sort((a, b) => {
+          const dateA = a.timestamp instanceof Date ? a.timestamp : new Date(a.timestamp);
+          const dateB = b.timestamp instanceof Date ? b.timestamp : new Date(b.timestamp);
+          return dateB.getTime() - dateA.getTime();
+        });
+        
+        if (readings.length === 0) return `${label}: No data recorded\n`;
+        
+        let output = `${label} (${readings.length} readings):\n`;
+        readings.forEach((r, i) => {
+          const date = r.timestamp instanceof Date ? r.timestamp : new Date(r.timestamp);
+          const dateStr = date.toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' });
+          const timeStr = date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+          let valueStr = '';
+          
+          if (type === 'bloodPressure' && typeof r.value === 'object' && 'systolic' in r.value) {
+            valueStr = `${r.value.systolic}/${r.value.diastolic}`;
+          } else if (typeof r.value === 'number') {
+            valueStr = r.value.toFixed(1);
+          }
+          
+          output += `  ${i + 1}. ${dateStr} ${timeStr} - ${valueStr} ${unit}\n`;
+        });
+        return output + '\n';
+      };
 
-RISK BREAKDOWN:
-- Cardiovascular: ${healthAnalysis.riskScore.cardiovascular}/100
-- Metabolic: ${healthAnalysis.riskScore.metabolic}/100  
-- Medication Compliance: ${healthAnalysis.riskScore.compliance}/100
+      // Get step count data (from latest reading if available)
+      const stepData = vitalReadings.find(v => v.type === 'steps');
+      const stepCount = stepData ? (typeof stepData.value === 'number' ? stepData.value : 0) : 0;
 
-MEDICATION COMPLIANCE (Last 7 Days):
-- Total Compliance: ${complianceStats.totalComplianceRate}%
-- Medicines Taken: ${complianceStats.taken}
-- Medicines Missed: ${complianceStats.missed}
+      // Create HTML formatted report
+      const htmlContent = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SafeNest Health Report</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 20px;
+      color: #333;
+    }
+    .container { 
+      max-width: 900px; 
+      margin: 0 auto; 
+      background: white; 
+      border-radius: 16px; 
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      overflow: hidden;
+    }
+    .header { 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white; 
+      padding: 40px 30px; 
+      text-align: center;
+    }
+    .header h1 { font-size: 32px; margin-bottom: 10px; font-weight: 700; }
+    .header p { font-size: 16px; opacity: 0.95; }
+    .content { padding: 30px; }
+    .section { 
+      margin-bottom: 35px; 
+      padding: 25px; 
+      background: #f8f9fa; 
+      border-radius: 12px;
+      border-left: 5px solid #667eea;
+    }
+    .section-title { 
+      font-size: 20px; 
+      font-weight: 700; 
+      color: #667eea; 
+      margin-bottom: 20px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .risk-card { 
+      background: white;
+      padding: 20px; 
+      border-radius: 10px; 
+      margin-bottom: 15px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .risk-score { 
+      font-size: 48px; 
+      font-weight: 800; 
+      color: #667eea;
+      margin: 10px 0;
+    }
+    .risk-high { color: #dc2626; }
+    .risk-moderate { color: #f59e0b; }
+    .risk-low { color: #10b981; }
+    .stat-grid { 
+      display: grid; 
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+      gap: 15px; 
+      margin-top: 15px;
+    }
+    .stat-box { 
+      background: white; 
+      padding: 20px; 
+      border-radius: 10px; 
+      text-align: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .stat-label { 
+      font-size: 12px; 
+      color: #6b7280; 
+      text-transform: uppercase; 
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+    .stat-value { 
+      font-size: 28px; 
+      font-weight: 700; 
+      color: #667eea;
+    }
+    .medicine-list { 
+      background: white; 
+      padding: 15px; 
+      border-radius: 8px; 
+      margin-top: 15px;
+    }
+    .medicine-item { 
+      padding: 12px; 
+      border-bottom: 1px solid #e5e7eb; 
+      display: flex;
+      align-items: center;
+    }
+    .medicine-item:last-child { border-bottom: none; }
+    .medicine-icon { 
+      width: 40px; 
+      height: 40px; 
+      background: #667eea; 
+      color: white; 
+      border-radius: 8px; 
+      display: flex; 
+      align-items: center; 
+      justify-content: center; 
+      font-weight: 700;
+      margin-right: 15px;
+    }
+    .vitals-table { 
+      width: 100%; 
+      background: white; 
+      border-radius: 8px; 
+      overflow: hidden;
+      margin-top: 15px;
+    }
+    .vitals-table th { 
+      background: #667eea; 
+      color: white; 
+      padding: 15px; 
+      text-align: left;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .vitals-table td { 
+      padding: 12px 15px; 
+      border-bottom: 1px solid #e5e7eb;
+      font-size: 14px;
+    }
+    .vitals-table tr:last-child td { border-bottom: none; }
+    .vitals-table tr:hover { background: #f3f4f6; }
+    .footer { 
+      background: #1f2937; 
+      color: white; 
+      text-align: center; 
+      padding: 25px;
+      font-size: 14px;
+    }
+    .badge { 
+      display: inline-block; 
+      padding: 6px 12px; 
+      border-radius: 20px; 
+      font-size: 12px; 
+      font-weight: 600;
+      margin-top: 10px;
+    }
+    .badge-success { background: #d1fae5; color: #065f46; }
+    .badge-warning { background: #fef3c7; color: #92400e; }
+    .badge-danger { background: #fee2e2; color: #991b1b; }
+    @media print {
+      body { background: white; padding: 0; }
+      .container { box-shadow: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🏥 SafeNest Health Report</h1>
+      <p>Comprehensive Health Analytics & Vital Monitoring</p>
+      <p style="margin-top: 10px; font-size: 14px;">Generated: ${reportDate}</p>
+    </div>
 
-VITALS DATA:
-${vitalReadings.length} vital readings recorded
+    <div class="content">
+      <!-- Health Risk Analysis -->
+      <div class="section">
+        <div class="section-title">📊 Overall Health Risk Analysis</div>
+        <div class="risk-card">
+          <div class="risk-score ${healthAnalysis.riskScore.overall >= 70 ? 'risk-high' : healthAnalysis.riskScore.overall >= 40 ? 'risk-moderate' : 'risk-low'}">${healthAnalysis.riskScore.overall}<span style="font-size: 24px;">/100</span></div>
+          <span class="badge ${healthAnalysis.riskScore.overall >= 70 ? 'badge-danger' : healthAnalysis.riskScore.overall >= 40 ? 'badge-warning' : 'badge-success'}">
+            ${healthAnalysis.riskScore.overall >= 70 ? '🚨 HIGH RISK' : healthAnalysis.riskScore.overall >= 40 ? '⚠️ MODERATE RISK' : '✅ LOW RISK'}
+          </span>
+        </div>
+        <div class="stat-grid">
+          <div class="stat-box">
+            <div class="stat-label">❤️ Cardiovascular</div>
+            <div class="stat-value">${healthAnalysis.riskScore.cardiovascular}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">🩺 Metabolic</div>
+            <div class="stat-value">${healthAnalysis.riskScore.metabolic}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">💊 Compliance</div>
+            <div class="stat-value">${healthAnalysis.riskScore.compliance}</div>
+          </div>
+        </div>
+      </div>
 
-ACTIVE MEDICINES:
-${medicines.map(m => `- ${m.name} (${m.dosage}) - Times: ${m.times.join(', ')}`).join('\n')}
+      <!-- Medication Compliance -->
+      <div class="section">
+        <div class="section-title">💊 Medication Compliance (All Time)</div>
+        <div class="stat-grid">
+          <div class="stat-box">
+            <div class="stat-label">Compliance Rate</div>
+            <div class="stat-value">${totalCompliance}%</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Taken</div>
+            <div class="stat-value" style="color: #10b981;">${totalTaken}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Missed</div>
+            <div class="stat-value" style="color: #dc2626;">${totalMissed}</div>
+          </div>
+        </div>
+        
+        <div style="margin-top: 20px; font-weight: 600; color: #374151;">Active Medicines:</div>
+        <div class="medicine-list">
+          ${medicines.length > 0 ? medicines.map((m, i) => `
+            <div class="medicine-item">
+              <div class="medicine-icon">${i + 1}</div>
+              <div>
+                <div style="font-weight: 600; color: #1f2937;">${m.name}</div>
+                <div style="font-size: 13px; color: #6b7280;">${m.dosage} • Times: ${m.times.join(', ')}</div>
+              </div>
+            </div>
+          `).join('') : '<div style="padding: 20px; text-align: center; color: #9ca3af;">No active medicines</div>'}
+        </div>
+      </div>
 
-Report generated by SafeNest - Senior Care Companion
-      `;
+      <!-- Vitals Data -->
+      <div class="section">
+        <div class="section-title">📈 Vitals Data - Complete History</div>
+        
+        ${['bloodPressure', 'heartRate', 'temperature', 'bloodSugar', 'spo2', 'weight'].map(type => {
+          const labels = {
+            bloodPressure: { icon: '🩺', name: 'Blood Pressure', unit: 'mmHg' },
+            heartRate: { icon: '❤️', name: 'Heart Rate', unit: 'bpm' },
+            temperature: { icon: '🌡️', name: 'Temperature', unit: '°F' },
+            bloodSugar: { icon: '🩸', name: 'Blood Sugar', unit: 'mg/dL' },
+            spo2: { icon: '💨', name: 'Oxygen Saturation', unit: '%' },
+            weight: { icon: '⚖️', name: 'Weight', unit: 'kg' }
+          };
+          const readings = vitalReadings.filter(v => v.type === type).sort((a, b) => {
+            const dateA = a.timestamp instanceof Date ? a.timestamp : new Date(a.timestamp);
+            const dateB = b.timestamp instanceof Date ? b.timestamp : new Date(b.timestamp);
+            return dateB.getTime() - dateA.getTime();
+          });
+          
+          if (readings.length === 0) return '';
+          
+          return `
+            <div style="margin-bottom: 25px;">
+              <h3 style="color: #374151; font-size: 16px; font-weight: 600; margin-bottom: 10px;">
+                ${labels[type].icon} ${labels[type].name} <span style="color: #9ca3af; font-size: 14px; font-weight: 400;">(${readings.length} readings)</span>
+              </h3>
+              <table class="vitals-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Date & Time</th>
+                    <th>Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${readings.slice(0, 50).map((r, i) => {
+                    const date = r.timestamp instanceof Date ? r.timestamp : new Date(r.timestamp);
+                    const dateStr = date.toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' });
+                    const timeStr = date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+                    let valueStr = '';
+                    
+                    if (type === 'bloodPressure' && typeof r.value === 'object' && 'systolic' in r.value) {
+                      valueStr = `${r.value.systolic}/${r.value.diastolic}`;
+                    } else if (typeof r.value === 'number') {
+                      valueStr = r.value.toFixed(1);
+                    }
+                    
+                    return `
+                      <tr>
+                        <td style="font-weight: 600; color: #667eea;">${i + 1}</td>
+                        <td>${dateStr} <span style="color: #9ca3af;">at</span> ${timeStr}</td>
+                        <td style="font-weight: 700; color: #1f2937;">${valueStr} <span style="color: #9ca3af; font-weight: 400;">${labels[type].unit}</span></td>
+                      </tr>
+                    `;
+                  }).join('')}
+                  ${readings.length > 50 ? `<tr><td colspan="3" style="text-align: center; color: #9ca3af; font-style: italic;">... and ${readings.length - 50} more readings</td></tr>` : ''}
+                </tbody>
+              </table>
+            </div>
+          `;
+        }).join('')}
+
+        <div style="margin-top: 20px;">
+          <h3 style="color: #374151; font-size: 16px; font-weight: 600; margin-bottom: 10px;">🚶 Daily Steps</h3>
+          <div class="stat-box" style="text-align: left;">
+            <div class="stat-label">Current Step Count</div>
+            <div class="stat-value">${stepCount.toLocaleString()}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Summary -->
+      <div class="section" style="border-left-color: #10b981;">
+        <div class="section-title" style="color: #10b981;">📋 Report Summary</div>
+        <div class="stat-grid">
+          <div class="stat-box">
+            <div class="stat-label">Total Vital Readings</div>
+            <div class="stat-value" style="color: #10b981;">${vitalReadings.length}</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-label">Report Period</div>
+            <div style="font-size: 16px; font-weight: 600; color: #374151; margin-top: 8px;">All Time Data</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p style="font-weight: 600; font-size: 16px; margin-bottom: 8px;">SafeNest - Senior Care Companion</p>
+      <p style="opacity: 0.8;">Empowering seniors with comprehensive health monitoring</p>
+    </div>
+  </div>
+</body>
+</html>`;
 
       // Create blob and download
-      const blob = new Blob([content], { type: 'text/plain' });
-      const fileName = `SafeNest_Health_Report_${new Date().toISOString().split('T')[0]}.txt`;
+      const blob = new Blob([htmlContent], { type: 'text/html' });
+      const fileName = `SafeNest_Health_Report_${new Date().toISOString().split('T')[0]}.html`;
       
       // Request storage permission for Android
       if (typeof (window as any).Capacitor !== 'undefined') {

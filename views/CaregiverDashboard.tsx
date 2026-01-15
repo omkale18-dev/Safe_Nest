@@ -111,12 +111,96 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
 
   const isEmergency = seniorStatus.status !== 'Normal';
 
+  // State for fetched address when not available from Firebase
+  const [fetchedAddress, setFetchedAddress] = useState<string | null>(null);
+  const lastFetchedCoordsRef = useRef<{lat: number, lng: number} | null>(null);
+
+  // Fetch address from coordinates if not available
+  useEffect(() => {
+    const loc = seniorStatus.location;
+    if (!loc || !loc.lat || !loc.lng) return;
+    
+    const addr = loc.address || '';
+    const placeholders = ['Locating...', 'Initializing GPS...', 'GPS Signal Weak', 'Loading location...', ''];
+    
+    // Only fetch if address is a placeholder
+    if (!placeholders.includes(addr) && addr) {
+      setFetchedAddress(null);
+      return;
+    }
+    
+    // Skip if coordinates haven't changed
+    if (lastFetchedCoordsRef.current && 
+        Math.abs(lastFetchedCoordsRef.current.lat - loc.lat) < 0.0001 &&
+        Math.abs(lastFetchedCoordsRef.current.lng - loc.lng) < 0.0001) {
+      return;
+    }
+    
+    // Skip if using default coordinates
+    if (loc.lat === 18.5204 && loc.lng === 73.8567) return;
+    if (loc.lat === 0 && loc.lng === 0) return;
+    
+    // Skip geocoding on localhost to avoid CORS errors
+    const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (isLocalhost) {
+      setFetchedAddress(`${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`);
+      return;
+    }
+    
+    // Debounce: wait 3 seconds before fetching to avoid rate limits
+    const timeoutId = setTimeout(async () => {
+      try {
+        const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${loc.lat}&lon=${loc.lng}&zoom=18&addressdetails=1`;
+        const response = await fetch(url, {
+          headers: {
+            'Accept-Language': 'en',
+            'User-Agent': 'SafeNestApp/1.0'
+          }
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data.address) {
+            const { amenity, shop, building, office, leisure, road, house_number, city, town, village, suburb, neighbourhood } = data.address;
+            const specificName = amenity || shop || building || office || leisure;
+            const street = road ? `${house_number ? house_number + ' ' : ''}${road}` : '';
+            const area = neighbourhood || suburb || village || town || city;
+            
+            let displayAddress = '';
+            if (specificName && street) displayAddress = `${specificName}, ${street}`;
+            else if (specificName && area) displayAddress = `${specificName}, ${area}`;
+            else if (specificName) displayAddress = specificName;
+            else if (street && area) displayAddress = `${street}, ${area}`;
+            else if (street) displayAddress = street;
+            else displayAddress = data.display_name?.split(',').slice(0, 2).join(',') || `${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`;
+            
+            setFetchedAddress(displayAddress);
+            lastFetchedCoordsRef.current = { lat: loc.lat, lng: loc.lng };
+          }
+        } else {
+          console.warn('[CaregiverDashboard] Geocoding HTTP error:', response.status);
+        }
+      } catch (e) {
+        console.warn('[CaregiverDashboard] Address fetch failed:', e);
+        setFetchedAddress(`${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`);
+      }
+    }, 3000);
+    
+    return () => clearTimeout(timeoutId);
+  }, [seniorStatus.location?.lat, seniorStatus.location?.lng, seniorStatus.location?.address]);
+
   const locationLabel = (() => {
     const loc = seniorStatus.location;
     if (!loc) return 'Locating...';
     const addr = loc.address || '';
-    const placeholders = ['Locating...', 'Initializing GPS...', 'GPS Signal Weak'];
+    const placeholders = ['Locating...', 'Initializing GPS...', 'GPS Signal Weak', 'Loading location...', ''];
     if (!addr || placeholders.includes(addr)) {
+      // Use fetched address if available
+      if (fetchedAddress) return fetchedAddress;
+      // Show coordinates if we have them
+      if (loc.lat && loc.lng && loc.lat !== 0 && loc.lat !== 18.5204) {
+        return `${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`;
+      }
       return 'Locating...';
     }
     return addr;
@@ -449,7 +533,20 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
               )}
               <div>
                 <p className="text-sm font-bold text-gray-500 uppercase">Monitoring</p>
-                <p className="text-lg font-bold text-gray-900">{senior?.name || 'Senior'}</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-lg font-bold text-gray-900">{senior?.name || 'Senior'}</p>
+                  {seniorStatus.location && seniorStatus.location.lat !== 0 && seniorStatus.location.lat !== 18.5204 ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-50 border border-green-200 rounded-full text-xs font-semibold text-green-700">
+                      <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></span>
+                      Live
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-gray-100 border border-gray-200 rounded-full text-xs font-semibold text-gray-600">
+                      <span className="w-1.5 h-1.5 bg-gray-400 rounded-full"></span>
+                      Offline
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
                 <div className="flex items-center gap-2">
@@ -665,7 +762,20 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
                   </div>
                   <div className="flex-1">
                     <p className="text-sm font-semibold text-gray-600 mb-1">Current Location</p>
-                    <p className="text-lg font-bold text-gray-900 mb-2">{seniorStatus?.location?.address || 'Updating location...'}</p>
+                    <p className="text-lg font-bold text-gray-900 mb-2">{locationLabel}</p>
+                    {(locationLabel === 'Locating...' || seniorStatus.location?.lat === 0 || seniorStatus.location?.lat === 18.5204) && (
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-2">
+                        <p className="text-xs text-amber-800 font-medium">
+                          <strong>Waiting for {senior.name}'s device:</strong> Make sure their device is:
+                        </p>
+                        <ul className="text-xs text-amber-700 mt-1 ml-4 list-disc space-y-0.5">
+                          <li>Logged in as Senior</li>
+                          <li>Location sharing enabled in settings</li>
+                          <li>GPS/Location permissions granted</li>
+                          <li>App is running in foreground</li>
+                        </ul>
+                      </div>
+                    )}
                     <p className="text-xs text-gray-500">Last updated: {seniorStatus?.lastUpdate ? new Date(seniorStatus.lastUpdate).toLocaleTimeString() : 'N/A'}</p>
                   </div>
                   <button 

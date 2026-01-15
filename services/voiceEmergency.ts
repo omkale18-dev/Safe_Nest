@@ -78,8 +78,8 @@ class VoiceEmergencyDetector {
     const rms = Math.sqrt(sum / bufferLength);
     const volume = Math.round(rms);
 
-    // Convert to approximate dB (simplified)
-    const db = volume > 0 ? 20 * Math.log10(volume / 255) + 60 : 0;
+    // Convert to approximate dB with adjusted scaling (matches 70-80 dB thresholds)
+    const db = volume > 0 ? 20 * Math.log10(volume / 255) + 90 : 0;
 
     // Check if volume exceeds threshold (indicates shouting)
     if (db > this.config.volumeThreshold) {

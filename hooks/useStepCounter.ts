@@ -33,12 +33,10 @@ export const useStepCounter = (autoStart: boolean = true): UseStepCounterReturn 
       setIsTracking(false);
     }
 
-    // Cleanup
+    // Cleanup - don't stop tracking on unmount to allow background operation
     return () => {
       unsubscribe();
-      if (autoStart) {
-        stepCounterService.stopTracking();
-      }
+      // Keep tracking active in background even when component unmounts
     };
   }, [autoStart]);
 

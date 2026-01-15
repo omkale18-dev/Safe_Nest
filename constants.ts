@@ -5,7 +5,7 @@ export const INITIAL_SENIOR_STATUS: SeniorStatus = {
   batteryLevel: 92, // Will be overwritten by real sensor
   heartRate: 72,
   spo2: 98,
-  steps: 3450,
+  steps: 0,
   // New Mock Data
   sleepHours: 7.5,
   sleepScore: 85,
@@ -19,9 +19,9 @@ export const INITIAL_SENIOR_STATUS: SeniorStatus = {
   isFallDetectionEnabled: true,
   isLocationSharingEnabled: true,
   location: {
-    lat: 37.7749,
-    lng: -122.4194,
-    address: 'Initializing GPS...',
+    lat: 18.5204,  // Pune, India coordinates as default
+    lng: 73.8567,
+    address: 'Loading location...',
     updatedAt: new Date()
   },
   recentActivity: [

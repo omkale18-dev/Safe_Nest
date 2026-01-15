@@ -65,6 +65,15 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
 
   const normalizePhone = (value: string) => value.replace(/\D/g, '');
 
+  // Ensure stable member IDs so repeated logins update the same Firebase record
+  const buildStableId = (role: UserRole, phoneValue: string, fallbackId?: string) => {
+    const digits = normalizePhone(phoneValue);
+    if (digits.length === 10) {
+      return `${role === UserRole.SENIOR ? 'senior' : 'caregiver'}-${digits}`;
+    }
+    return fallbackId || `u${Date.now()}`;
+  };
+
   // Auto-send senior OTP after caregiver enters household code (only once per code)
   useEffect(() => {
     const run = async () => {
@@ -556,41 +565,41 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
 
   if (step === 'caregiver-found' && foundCaregiver) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-100 flex items-center justify-center p-6">
-        <div className="max-w-lg w-full">
+      <div className="h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-100 flex items-center justify-center p-4 overflow-hidden">
+        <div className="max-w-md w-full">
           {/* Welcome Card */}
-          <div className="bg-white rounded-3xl shadow-2xl overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-2xl overflow-hidden">
             {/* Header Section with Avatar */}
-            <div className="relative bg-white px-8 pt-12 pb-8">
-              <div className="absolute top-4 right-4">
-                <div className="w-3 h-3 bg-green-400 rounded-full animate-pulse"></div>
+            <div className="relative bg-white px-5 pt-6 pb-4">
+              <div className="absolute top-2 right-2">
+                <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
               </div>
               <div className="flex flex-col items-center">
-                <div className="relative mb-4">
-                  <div className="w-24 h-24 rounded-full overflow-hidden border-4 border-gray-100 shadow-xl">
+                <div className="relative mb-2">
+                  <div className="w-16 h-16 rounded-full overflow-hidden border-3 border-gray-100 shadow-lg">
                     <img 
                       src={foundCaregiver.avatar} 
                       alt={foundCaregiver.name}
                       className="w-full h-full object-cover"
                     />
                   </div>
-                  <div className="absolute -bottom-2 -right-2 bg-green-500 p-2 rounded-full shadow-lg">
-                    <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 20 20">
+                  <div className="absolute -bottom-0.5 -right-0.5 bg-green-500 p-1 rounded-full shadow-lg">
+                    <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 20 20">
                       <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                     </svg>
                   </div>
                 </div>
-                <h2 className="text-3xl font-bold text-gray-900 mb-2">Welcome Back!</h2>
-                <p className="text-gray-600 text-lg font-medium">{foundCaregiver.name}</p>
-                <div className="mt-4 px-4 py-2 bg-green-100 rounded-full">
-                  <p className="text-sm text-green-800 font-medium">✓ Verified Caregiver</p>
+                <h2 className="text-xl font-bold text-gray-900 mb-1">Welcome Back!</h2>
+                <p className="text-gray-600 text-sm font-medium">{foundCaregiver.name}</p>
+                <div className="mt-2 px-3 py-1 bg-green-100 rounded-full">
+                  <p className="text-xs text-green-800 font-medium">✓ Verified Caregiver</p>
                 </div>
               </div>
             </div>
 
             {/* Action Cards */}
-            <div className="px-8 pb-8">
-              <div className="space-y-4">
+            <div className="px-5 pb-5">
+              <div className="space-y-2.5">
                 {/* Proceed to Dashboard Card */}
                 <button
                   onClick={() => {
@@ -600,21 +609,21 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
                        onComplete(foundCaregiver, UserRole.CAREGIVER);
                      }
                   }}
-                  className="group w-full bg-white rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 p-6 border-2 border-transparent hover:border-blue-500"
+                  className="group w-full bg-white rounded-lg shadow-md hover:shadow-lg transition-all duration-300 p-3.5 border-2 border-transparent hover:border-blue-500"
                 >
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-4">
-                      <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
-                        <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-11 h-11 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform duration-300">
+                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                         </svg>
                       </div>
                       <div className="text-left">
-                        <h3 className="text-lg font-bold text-gray-900 group-hover:text-blue-600 transition-colors">View Dashboard</h3>
-                        <p className="text-sm text-gray-500">Monitor your seniors</p>
+                        <h3 className="text-base font-bold text-gray-900 group-hover:text-blue-600 transition-colors">View Dashboard</h3>
+                        <p className="text-xs text-gray-500">Monitor your seniors</p>
                       </div>
                     </div>
-                    <svg className="w-6 h-6 text-gray-400 group-hover:text-blue-600 group-hover:translate-x-1 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5 text-gray-400 group-hover:text-blue-600 group-hover:translate-x-1 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
                   </div>
@@ -628,21 +637,21 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
                     setPhone(foundCaregiver.phone.replace(/\D/g, ''));
                     setStep('rejoin');
                   }}
-                  className="group w-full bg-white rounded-2xl shadow-lg hover:shadow-xl transition-all duration-300 p-6 border-2 border-transparent hover:border-green-500"
+                  className="group w-full bg-white rounded-lg shadow-md hover:shadow-lg transition-all duration-300 p-3.5 border-2 border-transparent hover:border-green-500"
                 >
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center space-x-4">
-                      <div className="w-14 h-14 bg-gradient-to-br from-green-500 to-emerald-600 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
-                        <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div className="flex items-center space-x-3">
+                      <div className="w-11 h-11 bg-gradient-to-br from-green-500 to-emerald-600 rounded-lg flex items-center justify-center group-hover:scale-105 transition-transform duration-300">
+                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
                         </svg>
                       </div>
                       <div className="text-left">
-                        <h3 className="text-lg font-bold text-gray-900 group-hover:text-green-600 transition-colors">Add Another Senior</h3>
-                        <p className="text-sm text-gray-500">Join a new household</p>
+                        <h3 className="text-base font-bold text-gray-900 group-hover:text-green-600 transition-colors">Add Another Senior</h3>
+                        <p className="text-xs text-gray-500">Join a new household</p>
                       </div>
                     </div>
-                    <svg className="w-6 h-6 text-gray-400 group-hover:text-green-600 group-hover:translate-x-1 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5 text-gray-400 group-hover:text-green-600 group-hover:translate-x-1 transition-all" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                     </svg>
                   </div>
@@ -650,12 +659,12 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
               </div>
 
               {/* Info Section */}
-              <div className="mt-6 p-4 bg-blue-50 rounded-xl border border-blue-100">
-                <div className="flex items-start space-x-3">
-                  <svg className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
+              <div className="mt-3 p-2.5 bg-blue-50 rounded-lg border border-blue-100">
+                <div className="flex items-start space-x-2">
+                  <svg className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20">
                     <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                   </svg>
-                  <p className="text-sm text-blue-800">
+                  <p className="text-xs text-blue-800">
                     Your account is verified and ready. Choose an option above to continue.
                   </p>
                 </div>
@@ -844,7 +853,7 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
 
         // Senior approved! Now complete caregiver registration
         const profile: UserProfile = {
-          id: existingProfileId || `u${Date.now()}`,
+          id: buildStableId(UserRole.CAREGIVER, phone, existingProfileId),
           name: name.trim(),
           role: UserRole.CAREGIVER,
           phone: phone.replace(/\D/g, ''),
@@ -968,7 +977,7 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
               <button
                 onClick={() => {
                   const profile: UserProfile = {
-                    id: existingProfileId || `u${Date.now()}`,
+                    id: buildStableId(UserRole.CAREGIVER, phone, existingProfileId),
                     name: name || 'Caregiver',
                     role: UserRole.CAREGIVER,
                     avatar: avatar,
@@ -1071,15 +1080,31 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
             return false;
           }
           setHouseholdCode(foundCode);
+
+          // Reuse existing member profile when rejoining to avoid duplicate entries and name reset
+          let existingMember: UserProfile | null = null;
+          if (onCheckExistingMember) {
+            existingMember = await onCheckExistingMember(foundCode, lookupPhone);
+            if (existingMember?.id) {
+              setExistingProfileId(existingMember.id);
+            }
+            if (existingMember?.name && !name) {
+              setName(existingMember.name);
+            }
+            if (existingMember?.avatar && !avatar) {
+              setAvatar(existingMember.avatar);
+            }
+          }
+
           const profile: UserProfile = {
-            id: existingProfileId || `u${Date.now()}`,
-            name: name?.trim() || existingProfile?.name || 'Senior',
+            id: buildStableId(selectedRole!, lookupPhone, existingMember?.id || existingProfileId),
+            name: (existingMember?.name || name?.trim() || existingProfile?.name || 'Senior'),
             role: selectedRole!,
             phone: lookupPhone,
             email: email || '',
             isPhoneVerified: type === 'phone',
             isEmailVerified: type === 'email',
-            avatar: avatar,
+            avatar: existingMember?.avatar || avatar,
             deviceName: selectedRole === UserRole.SENIOR ? getDeviceName() : undefined,
             lastActiveDevice: getDeviceName()
           };
@@ -1108,7 +1133,7 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
   if (step === 'otp-verification') {
     const handleOTPVerifySuccess = () => {
       const profile: UserProfile = {
-        id: existingProfileId || `u${Date.now()}`,
+        id: buildStableId(selectedRole!, phone, existingProfileId),
         name: name.trim(),
         role: selectedRole!,
         phone: phone.replace(/\D/g, ''),

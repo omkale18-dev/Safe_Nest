@@ -58,7 +58,6 @@ export const ContactsView: React.FC<ContactsViewProps> = ({ caregivers = [], con
       )}
 
       <div>
-        <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-3">{t.otherContacts}</h2>
         <div className="space-y-3">
             {contacts.map((contact) => (
               <div key={contact.id} className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm flex items-center gap-3">

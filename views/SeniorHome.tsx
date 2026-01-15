@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Heart, Activity, MapPin, Zap, LogOut, Mic, Pill, AlertCircle, Plus, Thermometer, Gauge, Check, Clock, Droplets, Scale, Wind } from 'lucide-react';
 import { ActivitySuggestions } from '../components/ActivitySuggestions';
+import { MedicineReminderModal } from '../components/MedicineReminderModal';
 import { SeniorStatus, UserProfile, Medicine, MedicineLog, VitalReading } from '../types';
 import { ManualVitalsEntry } from './ManualVitalsEntry';
 import { useLanguage } from '../i18n/LanguageContext';
@@ -53,6 +54,8 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
   const [nextVitalsAvailable, setNextVitalsAvailable] = useState<Date | null>(null);
   const [isVitalsLocked, setIsVitalsLocked] = useState(false);
   const [showAllVitals, setShowAllVitals] = useState(false);
+  const [medicineReminder, setMedicineReminder] = useState<{ medicine: Medicine; time: string } | null>(null);
+  const medicineReminderRef = useRef<NodeJS.Timeout | null>(null);
   
   // Get latest vital reading of a specific type
   const getLatestVital = (type: 'bloodPressure' | 'temperature' | 'weight' | 'heartRate' | 'spo2' | 'bloodSugar' | 'stress') => {
@@ -145,6 +148,70 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
       }, timeUntilAvailable);
     }
   };
+
+  // Check for medicine reminders every minute
+  useEffect(() => {
+    const checkMedicineReminders = () => {
+      const now = new Date();
+      const currentHour = now.getHours().toString().padStart(2, '0');
+      const currentMin = now.getMinutes().toString().padStart(2, '0');
+      const currentTime = `${currentHour}:${currentMin}`;
+
+      // Check for medicines scheduled right now (within 1 minute)
+      for (const medicine of medicines) {
+        const startDate = new Date(medicine.startDate);
+        const startMidnight = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
+        const todayStart = new Date().setHours(0, 0, 0, 0);
+
+        if (todayStart < startMidnight) continue;
+
+        const isActive = medicine.isOngoing === true || !medicine.endDate;
+        if (!isActive && medicine.endDate) {
+          const endDate = new Date(medicine.endDate);
+          const endMidnight = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime();
+          if (todayStart > endMidnight) continue;
+        }
+
+        for (const time of medicine.times) {
+          const normalizeTime = (t: string) => {
+            const parts = t.split(':').map(s => parseInt(s, 10));
+            if (parts.length < 2) return t.trim();
+            return `${parts[0].toString().padStart(2, '0')}:${parts[1].toString().padStart(2, '0')}`;
+          };
+
+          const normalizedTime = normalizeTime(time);
+          const normalizedCurrentTime = normalizeTime(currentTime);
+
+          // If current time matches medicine time
+          if (normalizedTime === normalizedCurrentTime) {
+            // Check if already taken
+            const log = medicineLogs?.find((l) => {
+              const logDate = l.date instanceof Date ? l.date : new Date(l.date);
+              const logMidnight = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate()).getTime();
+              return (
+                l.medicineId === medicine.id &&
+                logMidnight === todayStart &&
+                normalizeTime(l.scheduledTime || '') === normalizedTime
+              );
+            });
+
+            if (!log) {
+              setMedicineReminder({ medicine, time: normalizedTime });
+            }
+          }
+        }
+      }
+    };
+
+    medicineReminderRef.current = setInterval(checkMedicineReminders, 60000); // Check every minute
+    checkMedicineReminders(); // Check immediately
+
+    return () => {
+      if (medicineReminderRef.current) {
+        clearInterval(medicineReminderRef.current);
+      }
+    };
+  }, [medicines, medicineLogs]);
 
   const handleSaveVital = (vital: Omit<VitalReading, 'id' | 'timestamp'>) => {
     if (onAddVital && householdId) {
@@ -365,6 +432,7 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
           medicine: Medicine;
           time: string;
           status: 'TAKEN' | 'PENDING' | 'OVERDUE';
+          logStatus?: 'TAKEN' | 'MISSED' | 'SKIPPED';
         }> = [];
 
         medicines.forEach((medicine) => {
@@ -411,13 +479,15 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
             todaysMeds.push({
               medicine,
               time,
-              status
+              status,
+              logStatus: log?.status as 'TAKEN' | 'MISSED' | 'SKIPPED' | undefined
             });
           });
         });
 
         const pendingMedicines = todaysMeds.filter(m => m.status === 'PENDING' || m.status === 'OVERDUE');
-        const completedMedicines = todaysMeds.filter(m => m.status === 'TAKEN');
+        const takenMedicines = todaysMeds.filter(m => m.status === 'TAKEN' && m.logStatus === 'TAKEN');
+        const missedOrSkippedMedicines = todaysMeds.filter(m => m.status === 'TAKEN' && (m.logStatus === 'MISSED' || m.logStatus === 'SKIPPED'));
 
         return (
           <div className="mt-6 space-y-6">
@@ -492,22 +562,47 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
               </div>
             </div>
 
-            {/* Completed Medicines Today */}
-            {completedMedicines.length > 0 && (
+            {/* Completed (Taken) Medicines Today */}
+            {takenMedicines.length > 0 && (
               <div>
-                <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Completed Today</h2>
-                <div className="space-y-3 opacity-60">
-                  {completedMedicines.map((item, idx) => (
-                    <div key={`completed-${item.medicine.id}-${item.time}-${idx}`} className="bg-gray-100 p-4 rounded-2xl flex items-center justify-between">
+                <h2 className="text-xs font-bold text-green-600 uppercase tracking-widest mb-3">✓ Taken Today</h2>
+                <div className="space-y-3 opacity-75">
+                  {takenMedicines.map((item, idx) => (
+                    <div key={`completed-${item.medicine.id}-${item.time}-${idx}`} className="bg-green-50 p-4 rounded-2xl border border-green-200 flex items-center justify-between">
                       <div className="flex items-center gap-4">
                         <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center text-green-600">
                           <Check size={20} />
                         </div>
                         <div>
-                          <h3 className="font-bold text-gray-600 line-through">{item.medicine.name}</h3>
-                          <p className="text-xs text-gray-400">{item.medicine.dosage} • Taken at {item.time}</p>
+                          <h3 className="font-bold text-green-700">{item.medicine.name}</h3>
+                          <p className="text-xs text-green-600">{item.medicine.dosage} • Taken at {item.time}</p>
                           {item.medicine.instructions && (
-                            <p className="text-xs text-gray-400 mt-1">{item.medicine.instructions}</p>
+                            <p className="text-xs text-green-500 mt-1">{item.medicine.instructions}</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Missed or Skipped Medicines Today */}
+            {missedOrSkippedMedicines.length > 0 && (
+              <div>
+                <h2 className="text-xs font-bold text-red-600 uppercase tracking-widest mb-3">✗ Missed/Skipped</h2>
+                <div className="space-y-3 opacity-75">
+                  {missedOrSkippedMedicines.map((item, idx) => (
+                    <div key={`missed-${item.medicine.id}-${item.time}-${idx}`} className="bg-red-50 p-4 rounded-2xl border border-red-200 flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center text-red-600">
+                          <AlertCircle size={20} />
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-red-700">{item.medicine.name}</h3>
+                          <p className="text-xs text-red-600">{item.medicine.dosage} • {item.logStatus === 'MISSED' ? 'Missed' : 'Skipped'} at {item.time}</p>
+                          {item.medicine.instructions && (
+                            <p className="text-xs text-red-500 mt-1">{item.medicine.instructions}</p>
                           )}
                         </div>
                       </div>
@@ -876,6 +971,30 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
           onSave={handleSaveVital}
           onClose={() => setShowVitalsEntry(false)}
           enteredBy="senior"
+        />
+      )}
+
+      {/* Medicine Reminder Modal */}
+      {medicineReminder && (
+        <MedicineReminderModal
+          medicine={medicineReminder.medicine}
+          scheduledTime={medicineReminder.time}
+          onTaken={() => {
+            if (onMarkTaken) {
+              onMarkTaken(medicineReminder.medicine.id, medicineReminder.time);
+            }
+            setMedicineReminder(null);
+          }}
+          onSnooze={(minutes) => {
+            // Show reminder again after snooze
+            setTimeout(() => {
+              setMedicineReminder(medicineReminder);
+            }, minutes * 60 * 1000);
+            setMedicineReminder(null);
+          }}
+          onDismiss={() => {
+            setMedicineReminder(null);
+          }}
         />
       )}
     </div>

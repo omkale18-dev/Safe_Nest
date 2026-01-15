@@ -173,7 +173,7 @@ export interface VitalReading {
   systolic?: number; // For blood pressure readings
   diastolic?: number; // For blood pressure readings
   timestamp: Date;
-  source: 'smartwatch' | 'manual'; // Where data came from
+  source: 'manual'; // Where data came from
   enteredBy?: 'senior' | 'caregiver'; // Who entered it (for manual entries)
   notes?: string;
 }

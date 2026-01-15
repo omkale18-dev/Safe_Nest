@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Heart, Droplet, Thermometer, Gauge, Activity, Plus } from 'lucide-react';
+import { Heart, Droplet, Thermometer, Gauge, Activity, Plus, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import { VitalReading, SeniorStatus } from '../types';
 import { ManualVitalsEntry } from './ManualVitalsEntry';
 
@@ -15,9 +15,70 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
   seniorStatus,
 }) => {
   const [showVitalsEntry, setShowVitalsEntry] = useState(false);
+  const [stepTarget, setStepTarget] = useState<number>(() => {
+    return parseInt(localStorage.getItem('safenest_caregiver_step_target') || '5000', 10);
+  });
+  const [isEditingStepTarget, setIsEditingStepTarget] = useState(false);
+  const [editStepValue, setEditStepValue] = useState(stepTarget.toString());
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [calendarMonth, setCalendarMonth] = useState<Date>(new Date());
 
   // Get daily steps from senior status
   const dailySteps = seniorStatus?.steps || 0;
+
+  // Save step target to localStorage when it changes
+  React.useEffect(() => {
+    localStorage.setItem('safenest_caregiver_step_target', stepTarget.toString());
+  }, [stepTarget]);
+
+  // Get vitals for a specific date
+  const getVitalsForDate = (date: Date) => {
+    const targetDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    return {
+      bp: vitalReadings?.find(v => {
+        const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
+        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
+        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'bloodPressure';
+      }),
+      temp: vitalReadings?.find(v => {
+        const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
+        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
+        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'temperature';
+      }),
+      weight: vitalReadings?.find(v => {
+        const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
+        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
+        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'weight';
+      }),
+      bg: vitalReadings?.find(v => {
+        const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
+        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
+        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'bloodSugar';
+      }),
+      hr: vitalReadings?.find(v => {
+        const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
+        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
+        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'heartRate';
+      }),
+      spo2: vitalReadings?.find(v => {
+        const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
+        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
+        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'spo2';
+      }),
+    };
+  };
+
+  // Get all dates with vital data
+  const getDatesWithVitals = (): Set<number> => {
+    const datesWithData = new Set<number>();
+    vitalReadings?.forEach(reading => {
+      const date = reading.timestamp instanceof Date ? reading.timestamp : new Date(reading.timestamp);
+      const dayKey = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+      datesWithData.add(dayKey);
+    });
+    return datesWithData;
+  };
 
   // Get latest readings for each vital type
   const getLatestVital = (type: VitalReading['type']) => {
@@ -31,12 +92,16 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
     return filtered[0];
   };
 
-  const latestBP = getLatestVital('bloodPressure');
-  const latestHR = getLatestVital('heartRate');
-  const latestTemp = getLatestVital('temperature');
-  const latestWeight = getLatestVital('weight');
-  const latestBG = getLatestVital('bloodSugar');
-  const latestSpO2 = getLatestVital('spo2');
+  // Get vitals for selected date or latest
+  const selectedDateVitals = getVitalsForDate(selectedDate);
+  const isViewingSelectedDate = selectedDate.toDateString() !== new Date().toDateString();
+  
+  const latestBP = isViewingSelectedDate ? selectedDateVitals.bp : getLatestVital('bloodPressure');
+  const latestHR = isViewingSelectedDate ? selectedDateVitals.hr : getLatestVital('heartRate');
+  const latestTemp = isViewingSelectedDate ? selectedDateVitals.temp : getLatestVital('temperature');
+  const latestWeight = isViewingSelectedDate ? selectedDateVitals.weight : getLatestVital('weight');
+  const latestBG = isViewingSelectedDate ? selectedDateVitals.bg : getLatestVital('bloodSugar');
+  const latestSpO2 = isViewingSelectedDate ? selectedDateVitals.spo2 : getLatestVital('spo2');
 
   const formatTimestamp = (timestamp: Date | string) => {
     const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
@@ -62,9 +127,141 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
       <div className="p-6 space-y-4">
         {/* Header */}
         <div className="mb-6">
-          <h2 className="text-2xl font-bold text-gray-900">Daily Vitals</h2>
-          <p className="text-sm text-gray-600 mt-1">Latest readings for the senior</p>
+          <div className="flex justify-between items-center">
+            <div>
+              <h2 className="text-2xl font-bold text-gray-900">Daily Vitals</h2>
+              <p className="text-sm text-gray-600 mt-1">Latest readings for the senior</p>
+            </div>
+            <button
+              onClick={() => setShowCalendar(!showCalendar)}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 transition-colors"
+            >
+              <Calendar size={16} />
+              <span className="text-xs font-bold">History</span>
+            </button>
+          </div>
         </div>
+
+        {/* Calendar Modal */}
+        {showCalendar && (
+          <>
+            {/* Backdrop */}
+            <div 
+              onClick={() => setShowCalendar(false)}
+              className="fixed inset-0 bg-black/50 z-40"
+            />
+            {/* Modal */}
+            <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-2xl p-6 shadow-2xl border border-gray-100 space-y-4 w-full max-w-sm max-h-[90vh] overflow-y-auto z-50">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-bold text-gray-900">Select Date</h3>
+                <button
+                  onClick={() => setShowCalendar(false)}
+                  className="text-gray-400 hover:text-gray-600 text-2xl"
+                >
+                  ×
+                </button>
+              </div>
+
+              {/* Calendar Navigation */}
+              <div className="flex items-center justify-between gap-4 mb-4">
+                <button
+                  onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() - 1))}
+                  className="p-2 hover:bg-gray-100 rounded-lg transition"
+                >
+                  <ChevronLeft size={20} className="text-gray-600" />
+                </button>
+                <h4 className="font-bold text-gray-900 text-center flex-1">
+                  {calendarMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                </h4>
+                <button
+                  onClick={() => setCalendarMonth(new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1))}
+                  className="p-2 hover:bg-gray-100 rounded-lg transition"
+                >
+                  <ChevronRight size={20} className="text-gray-600" />
+                </button>
+              </div>
+
+              {/* Calendar Grid */}
+              <div className="grid grid-cols-7 gap-2">
+                {/* Day headers */}
+                {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
+                  <div key={day} className="text-center text-xs font-bold text-gray-500 py-2">
+                    {day}
+                  </div>
+                ))}
+
+                {/* Calendar days */}
+                {(() => {
+                  const year = calendarMonth.getFullYear();
+                  const month = calendarMonth.getMonth();
+                  const firstDay = new Date(year, month, 1);
+                  const lastDay = new Date(year, month + 1, 0);
+                  const daysInMonth = lastDay.getDate();
+                  const startingDayOfWeek = firstDay.getDay();
+                  
+                  const days = [];
+                  const datesWithData = getDatesWithVitals();
+
+                  // Empty cells before month starts
+                  for (let i = 0; i < startingDayOfWeek; i++) {
+                    days.push(
+                      <div key={`empty-${i}`} className="p-2"></div>
+                    );
+                  }
+
+                  // Days of month
+                  for (let day = 1; day <= daysInMonth; day++) {
+                    const date = new Date(year, month, day);
+                    const dateKey = date.getTime();
+                    const hasData = datesWithData.has(dateKey);
+                    const isSelected = selectedDate.toDateString() === date.toDateString();
+                    const isToday = new Date().toDateString() === date.toDateString();
+
+                    days.push(
+                      <button
+                        key={day}
+                        onClick={() => {
+                          setSelectedDate(date);
+                          setShowCalendar(false);
+                        }}
+                        className={`p-2 rounded-lg text-sm font-bold transition-all ${
+                          isSelected
+                            ? 'bg-blue-500 text-white shadow-md'
+                            : hasData
+                            ? 'bg-green-100 text-gray-900 hover:bg-green-200'
+                            : isToday
+                            ? 'bg-gray-200 text-gray-900 hover:bg-gray-300'
+                            : 'text-gray-600 hover:bg-gray-100'
+                        }`}
+                      >
+                        {day}
+                        {hasData && <div className="w-1 h-1 bg-green-500 rounded-full mx-auto mt-1"></div>}
+                      </button>
+                    );
+                  }
+
+                  return days;
+                })()}
+              </div>
+
+              <button
+                onClick={() => setShowCalendar(false)}
+                className="w-full py-2 bg-gray-100 text-gray-700 rounded-lg font-bold hover:bg-gray-200 transition"
+              >
+                Close
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* Date Display */}
+        {selectedDate.toDateString() !== new Date().toDateString() && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-center mb-4">
+            <p className="text-sm text-blue-700 font-bold">
+              Viewing vitals from: <span className="text-blue-900">{selectedDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
+            </p>
+          </div>
+        )}
 
         {/* Blood Pressure Card */}
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100">
@@ -119,6 +316,48 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
                 <p className="text-gray-500 text-sm">Today's activity</p>
               </div>
             </div>
+            <div className="flex items-center gap-2">
+              {!isEditingStepTarget ? (
+                <button
+                  onClick={() => {
+                    setIsEditingStepTarget(true);
+                    setEditStepValue(stepTarget.toString());
+                  }}
+                  className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-bold hover:bg-gray-200 transition-colors"
+                >
+                  Goal: {stepTarget.toLocaleString()}
+                </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    value={editStepValue}
+                    onChange={(e) => setEditStepValue(e.target.value)}
+                    className="w-20 px-2 py-1 rounded text-xs border border-gray-300 text-gray-900"
+                    min="100"
+                    max="50000"
+                  />
+                  <button
+                    onClick={() => {
+                      const newValue = parseInt(editStepValue, 10);
+                      if (!isNaN(newValue) && newValue > 0) {
+                        setStepTarget(newValue);
+                        setIsEditingStepTarget(false);
+                      }
+                    }}
+                    className="bg-blue-500 text-white px-2 py-1 rounded text-xs font-bold hover:bg-blue-600"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={() => setIsEditingStepTarget(false)}
+                    className="bg-gray-300 text-gray-700 px-2 py-1 rounded text-xs font-bold hover:bg-gray-400"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="flex items-end gap-2 mb-2">
@@ -127,16 +366,16 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
           </div>
 
           <div className="flex items-center justify-between text-sm mb-2">
-            <span className="font-bold text-gray-700">Daily Goal: 5,000 steps</span>
-            <span>{Math.round((dailySteps / 5000) * 100)}%</span>
+            <span className="font-bold text-gray-700">Daily Goal: {stepTarget.toLocaleString()} steps</span>
+            <span>{Math.round((dailySteps / stepTarget) * 100)}%</span>
           </div>
 
           <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
-            <div style={{ width: `${Math.min((dailySteps / 5000) * 100, 100)}%` }} className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-teal-400 rounded-full h-full transition-all duration-500"></div>
+            <div style={{ width: `${Math.min((dailySteps / stepTarget) * 100, 100)}%` }} className="shadow-none flex flex-col text-center whitespace-nowrap text-white justify-center bg-teal-400 rounded-full h-full transition-all duration-500"></div>
           </div>
 
           <p className="text-gray-500 text-sm font-medium mt-2">
-            {dailySteps < 5000 ? `${(5000 - dailySteps).toLocaleString()} steps to go!` : 'Goal achieved! 🎉'}
+            {dailySteps < stepTarget ? `${(stepTarget - dailySteps).toLocaleString()} steps to go!` : 'Goal achieved! 🎉'}
           </p>
         </div>
 

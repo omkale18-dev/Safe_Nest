@@ -49,30 +49,40 @@ export const OTPVerification: React.FC<OTPVerificationProps> = ({
     // Only allow single digit numbers
     const numericValue = value.replace(/[^0-9]/g, '').slice(-1);
     
-    if (!numericValue) return; // Don't update if no valid digit
-
     const newOtp = [...otp];
     newOtp[index] = numericValue;
     setOtp(newOtp);
     setError('');
 
-    // Auto-focus next input
+    // Auto-focus next input if digit entered
     if (numericValue && index < 5) {
       inputRefs.current[index + 1]?.focus();
     }
 
     // Auto-verify when all 6 digits entered
-    if (index === 5 && numericValue) {
-      const code = [...newOtp.slice(0, 5), numericValue].join('');
-      if (code.length === 6) {
-        handleVerify(code);
-      }
+    if (index === 5 && numericValue && newOtp.every(d => d)) {
+      const code = newOtp.join('');
+      handleVerify(code);
     }
   };
 
   const handleKeyDown = (index: number, e: React.KeyboardEvent) => {
-    if (e.key === 'Backspace' && !otp[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus();
+    if (e.key === 'Backspace') {
+      if (otp[index]) {
+        // Clear current digit
+        const newOtp = [...otp];
+        newOtp[index] = '';
+        setOtp(newOtp);
+        setError('');
+      } else if (index > 0) {
+        // If current is empty, move to previous and clear it
+        const newOtp = [...otp];
+        newOtp[index - 1] = '';
+        setOtp(newOtp);
+        inputRefs.current[index - 1]?.focus();
+        setError('');
+      }
+      e.preventDefault();
     }
   };
 
