@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Heart, Droplet, Thermometer, Gauge, Activity, Plus, Calendar, ChevronLeft, ChevronRight } from 'lucide-react';
 import { VitalReading, SeniorStatus } from '../types';
 import { ManualVitalsEntry } from './ManualVitalsEntry';
+import { useLanguage } from '../i18n/LanguageContext';
 
 interface CaregiverVitalsViewProps {
   vitalReadings: VitalReading[];
@@ -14,6 +15,7 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
   onAddVital,
   seniorStatus,
 }) => {
+  const { t } = useLanguage();
   const [showVitalsEntry, setShowVitalsEntry] = useState(false);
   const [stepTarget, setStepTarget] = useState<number>(() => {
     return parseInt(localStorage.getItem('safenest_caregiver_step_target') || '5000', 10);
@@ -35,36 +37,33 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
   // Get vitals for a specific date
   const getVitalsForDate = (date: Date) => {
     const targetDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const dayStart = targetDate.getTime();
+    const dayEnd = dayStart + (24 * 60 * 60 * 1000);
+    
     return {
       bp: vitalReadings?.find(v => {
         const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
-        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
-        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'bloodPressure';
+        return vDate.getTime() >= dayStart && vDate.getTime() < dayEnd && v.type === 'bloodPressure' && v.source === 'manual';
       }),
       temp: vitalReadings?.find(v => {
         const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
-        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
-        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'temperature';
+        return vDate.getTime() >= dayStart && vDate.getTime() < dayEnd && v.type === 'temperature' && v.source === 'manual';
       }),
       weight: vitalReadings?.find(v => {
         const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
-        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
-        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'weight';
+        return vDate.getTime() >= dayStart && vDate.getTime() < dayEnd && v.type === 'weight' && v.source === 'manual';
       }),
       bg: vitalReadings?.find(v => {
         const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
-        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
-        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'bloodSugar';
+        return vDate.getTime() >= dayStart && vDate.getTime() < dayEnd && v.type === 'bloodSugar' && v.source === 'manual';
       }),
       hr: vitalReadings?.find(v => {
         const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
-        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
-        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'heartRate';
+        return vDate.getTime() >= dayStart && vDate.getTime() < dayEnd && v.type === 'heartRate' && v.source === 'manual';
       }),
       spo2: vitalReadings?.find(v => {
         const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
-        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
-        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'spo2';
+        return vDate.getTime() >= dayStart && vDate.getTime() < dayEnd && v.type === 'spo2' && v.source === 'manual';
       }),
     };
   };
@@ -92,16 +91,17 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
     return filtered[0];
   };
 
-  // Get vitals for selected date or latest
+  // Always get vitals for the selected date (including today)
   const selectedDateVitals = getVitalsForDate(selectedDate);
-  const isViewingSelectedDate = selectedDate.toDateString() !== new Date().toDateString();
+  const isViewingToday = selectedDate.toDateString() === new Date().toDateString();
   
-  const latestBP = isViewingSelectedDate ? selectedDateVitals.bp : getLatestVital('bloodPressure');
-  const latestHR = isViewingSelectedDate ? selectedDateVitals.hr : getLatestVital('heartRate');
-  const latestTemp = isViewingSelectedDate ? selectedDateVitals.temp : getLatestVital('temperature');
-  const latestWeight = isViewingSelectedDate ? selectedDateVitals.weight : getLatestVital('weight');
-  const latestBG = isViewingSelectedDate ? selectedDateVitals.bg : getLatestVital('bloodSugar');
-  const latestSpO2 = isViewingSelectedDate ? selectedDateVitals.spo2 : getLatestVital('spo2');
+  // Always use date-specific vitals, never show latest across all dates
+  const latestBP = selectedDateVitals.bp;
+  const latestHR = selectedDateVitals.hr;
+  const latestTemp = selectedDateVitals.temp;
+  const latestWeight = selectedDateVitals.weight;
+  const latestBG = selectedDateVitals.bg;
+  const latestSpO2 = selectedDateVitals.spo2;
 
   const formatTimestamp = (timestamp: Date | string) => {
     const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
@@ -130,7 +130,9 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
           <div className="flex justify-between items-center">
             <div>
               <h2 className="text-2xl font-bold text-gray-900">Daily Vitals</h2>
-              <p className="text-sm text-gray-600 mt-1">Latest readings for the senior</p>
+              <p className="text-sm text-gray-600 mt-1">
+                {isViewingToday ? "Today's readings" : `Readings for ${selectedDate.toLocaleDateString()}`}
+              </p>
             </div>
             <button
               onClick={() => setShowCalendar(!showCalendar)}
@@ -141,6 +143,21 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Date Display - always show when not today */}
+        {!isViewingToday && (
+          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-center mb-4">
+            <p className="text-sm text-blue-700 font-bold">
+              Viewing vitals from: <span className="text-blue-900">{selectedDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
+            </p>
+            <button 
+              onClick={() => setSelectedDate(new Date())}
+              className="mt-2 text-xs text-blue-600 underline hover:text-blue-800"
+            >
+              View Today
+            </button>
+          </div>
+        )}
 
         {/* Calendar Modal */}
         {showCalendar && (
@@ -252,15 +269,6 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
               </button>
             </div>
           </>
-        )}
-
-        {/* Date Display */}
-        {selectedDate.toDateString() !== new Date().toDateString() && (
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-center mb-4">
-            <p className="text-sm text-blue-700 font-bold">
-              Viewing vitals from: <span className="text-blue-900">{selectedDate.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
-            </p>
-          </div>
         )}
 
         {/* Blood Pressure Card */}
@@ -487,7 +495,7 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
                     : 'bg-green-100 text-green-700'
                 }`}
               >
-                {(latestBG.value as number) > 180 ? 'High' : (latestBG.value as number) < 70 ? 'Low' : 'Normal'}
+                {(latestBG.value as number) > 180 ? t.high : (latestBG.value as number) < 70 ? t.low : t.normal}
               </span>
             </div>
 
@@ -518,7 +526,7 @@ export const CaregiverVitalsView: React.FC<CaregiverVitalsViewProps> = ({
                     : 'bg-green-100 text-green-700'
                 }`}
               >
-                {(latestSpO2.value as number) < 95 ? 'Low' : 'Good'}
+                {(latestSpO2.value as number) < 95 ? t.low : t.good}
               </span>
             </div>
 

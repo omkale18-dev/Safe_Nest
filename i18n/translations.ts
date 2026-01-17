@@ -143,6 +143,15 @@ export interface Translations {
   upcomingAppointments: string;
   today: string;
   tomorrow: string;
+  
+  // Voice Emergency
+  voiceEmergency: string;
+  detectShouts: string;
+  
+  // Vitals labels
+  low: string;
+  high: string;
+  moderate: string;
 }
 
 // Base English translations - all other languages will be auto-translated
@@ -260,6 +269,15 @@ export const baseTranslations: Translations = {
   upcomingAppointments: 'Upcoming Appointments',
   today: 'Today',
   tomorrow: 'Tomorrow',
+  
+  // Voice Emergency
+  voiceEmergency: 'Voice Emergency',
+  detectShouts: 'Detect shouts/loud sounds after fall',
+  
+  // Vitals labels
+  low: 'Low',
+  high: 'High',
+  moderate: 'Moderate',
 };
 
 // Static Hindi translations (partial)
@@ -352,6 +370,11 @@ export const staticHindiMap: Partial<Translations> = {
   upcomingAppointments: 'आगामी अपॉइंटमेंट',
   today: 'आज',
   tomorrow: 'कल',
+  voiceEmergency: 'आवाज़ आपातकाल',
+  detectShouts: 'गिरने के बाद चिल्लाने/तेज़ आवाज़ का पता लगाएं',
+  low: 'कम',
+  high: 'अधिक',
+  moderate: 'मध्यम',
 };
 
 // Static Marathi translations (partial)
@@ -443,6 +466,11 @@ export const staticMarathiMap: Partial<Translations> = {
   upcomingAppointments: 'आगामी भेटी',
   today: 'आज',
   tomorrow: 'उद्या',
+  voiceEmergency: 'आवाज आपत्कालीन',
+  detectShouts: 'पडल्यानंतर ओरडणे/मोठ्या आवाजाची ओळख',
+  low: 'कमी',
+  high: 'जास्त',
+  moderate: 'मध्यम',
 };
 
 export function buildStaticTranslations(lang: 'en' | 'hi' | 'mr'): Translations {

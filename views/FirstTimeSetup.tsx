@@ -3,11 +3,11 @@ import { UserRole, UserProfile } from '../types';
 import { User, Phone, Camera, AlertCircle, Mail } from 'lucide-react';
 import { sanitizeForLog, getDeviceName } from '../utils/sanitize';
 import { OTPVerification } from './OTPVerification';
-import { sendPhoneOTP, sendEmailOTP, verifyPhoneOTP, verifyEmailOTP } from '../services/otpService';
+import { sendPhoneOTP, verifyPhoneOTP, sendEmailOTP, verifyEmailOTP } from '../services/otpService';
 
 interface FirstTimeSetupProps {
   onComplete: (profile: UserProfile, role: UserRole) => void;
-  onRejoinWithCode?: (householdCode: string, profile: UserProfile, role: UserRole) => void;
+  onRejoinWithCode?: (householdCode: string, profile: UserProfile, role: UserRole) => Promise<boolean>;
   onLookupCodeByPhone?: (phone: string) => Promise<string | null>;
   onCheckExistingMember?: (householdCode: string, phone: string) => Promise<UserProfile | null>;
   onFetchSeniorPhoneByCode?: (householdCode: string) => Promise<string | null>;
@@ -58,6 +58,12 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
   const [caregiverPostVerification, setCaregiverPostVerification] = useState(false);
   const [caregiverSeniorsList, setCaregiverSeniorsList] = useState<UserProfile[]>([]);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  // Store navigation intent from verification to be executed by onVerifySuccess
+  const rejoinVerificationRef = React.useRef<{
+    type: 'caregiver-found' | 'rejoin-complete';
+    profile?: UserProfile;
+    code?: string;
+  } | null>(null);
   const [foundCaregiver, setFoundCaregiver] = useState<UserProfile | null>(null);
   const [pendingCaregiverApproval, setPendingCaregiverApproval] = useState(false);
   const [seniorPhone, setSeniorPhone] = useState('');
@@ -184,12 +190,13 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
       setLocalValidating(true);
       setLocalError('');
       try {
-        setEmail(contact.trim());
-        await sendEmailOTP(contact.trim());
+        const emailVal = contact.trim();
+        setEmail(emailVal);
+        await sendEmailOTP(emailVal);
         setStep('rejoin-otp');
-        setLocalValidating(false);
       } catch (e: any) {
         setLocalError(e.message || 'Could not send OTP. Please try again.');
+      } finally {
         setLocalValidating(false);
       }
     }
@@ -250,13 +257,15 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
       setLocalValidating(true);
       try {
         if (useEmailForRejoin) {
-          await sendEmailOTP(rejoinEmail.trim());
-          setEmail(rejoinEmail.trim());
+          const emailVal = rejoinEmail.trim();
+          setEmail(emailVal);
+          await sendEmailOTP(emailVal);
+          setStep('rejoin-otp');
         } else {
           await sendPhoneOTP(`+91${seniorDigits}`);
           setPhone(seniorDigits);
+          setStep('rejoin-otp');
         }
-        setStep('rejoin-otp');
       } catch (error: any) {
         setLocalError(error.message || 'Failed to send OTP.');
       } finally {
@@ -565,7 +574,7 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
 
   if (step === 'caregiver-found' && foundCaregiver) {
     return (
-      <div className="h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-100 flex items-center justify-center p-4 overflow-hidden">
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-100 flex items-center justify-center p-4">
         <div className="max-w-md w-full">
           {/* Welcome Card */}
           <div className="bg-white rounded-2xl shadow-2xl overflow-hidden">
@@ -1036,40 +1045,36 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
   }
 
   if (step === 'rejoin-otp') {
-    const handleRejoinOTPVerify = async (type: 'phone' | 'email', contact: string, code: string): Promise<boolean> => {
+    const handleRejoinOTPVerifyWrapper = async (type: 'phone' | 'email', contact: string, code: string): Promise<boolean> => {
       try {
-        const isValid = type === 'phone' ? await verifyPhoneOTP(code) : await verifyEmailOTP(contact, code);
+        // Verify based on type
+        const isValid = type === 'phone' 
+          ? await verifyPhoneOTP(code) 
+          : await verifyEmailOTP(contact, code);
         if (!isValid) return false;
 
-        // For email verification, we still need phone for household lookup
-        // Use rejoinPhone if available, otherwise fall back to phone state
         const lookupPhone = phone || normalizePhone(rejoinPhone);
         
         // Check if this is a caregiver verifying from lookup flow
-        if (selectedRole === UserRole.CAREGIVER && lookupPhone) {
-          // Search for existing caregiver by phone
-          if (onSearchCaregiverByPhone) {
-            const result = await onSearchCaregiverByPhone(lookupPhone);
-            if (result) {
-              // Caregiver found - show welcome screen
-              const cgProfile: UserProfile = {
-                id: result.profile.id,
-                name: result.profile.name,
-                role: UserRole.CAREGIVER,
-                avatar: result.profile.avatar,
-                phone: result.profile.phone
-              };
-              setFoundCaregiver(cgProfile);
-              setHouseholdCode(result.householdCode);
-              setIsRejoinFlow(true);
-              setStep('caregiver-found');
-              return true;
-            } else {
-              // Caregiver not found - show error
-              alert('No caregiver profile found with this phone number. Please create a new profile.');
-              setStep('lookup-caregiver');
-              return false;
-            }
+        if (selectedRole === UserRole.CAREGIVER && lookupPhone && onSearchCaregiverByPhone) {
+          const result = await onSearchCaregiverByPhone(lookupPhone);
+          if (result) {
+            const cgProfile: UserProfile = {
+              id: result.profile.id,
+              name: result.profile.name,
+              role: UserRole.CAREGIVER,
+              avatar: result.profile.avatar,
+              phone: result.profile.phone
+            };
+            setFoundCaregiver(cgProfile);
+            setHouseholdCode(result.householdCode);
+            setIsRejoinFlow(true);
+            rejoinVerificationRef.current = { type: 'caregiver-found' };
+            return true;
+          } else {
+            alert('No caregiver profile found with this phone number. Please create a new profile.');
+            setStep('lookup-caregiver');
+            return false;
           }
         }
         
@@ -1081,19 +1086,12 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
           }
           setHouseholdCode(foundCode);
 
-          // Reuse existing member profile when rejoining to avoid duplicate entries and name reset
           let existingMember: UserProfile | null = null;
           if (onCheckExistingMember) {
             existingMember = await onCheckExistingMember(foundCode, lookupPhone);
-            if (existingMember?.id) {
-              setExistingProfileId(existingMember.id);
-            }
-            if (existingMember?.name && !name) {
-              setName(existingMember.name);
-            }
-            if (existingMember?.avatar && !avatar) {
-              setAvatar(existingMember.avatar);
-            }
+            if (existingMember?.id) setExistingProfileId(existingMember.id);
+            if (existingMember?.name && !name) setName(existingMember.name);
+            if (existingMember?.avatar && !avatar) setAvatar(existingMember.avatar);
           }
 
           const profile: UserProfile = {
@@ -1108,7 +1106,7 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
             deviceName: selectedRole === UserRole.SENIOR ? getDeviceName() : undefined,
             lastActiveDevice: getDeviceName()
           };
-          if (onRejoinWithCode) onRejoinWithCode(foundCode, profile, selectedRole!);
+          rejoinVerificationRef.current = { type: 'rejoin-complete', profile, code: foundCode };
           return true;
         }
         return false;
@@ -1118,14 +1116,31 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
       }
     };
 
+    const handleRejoinVerifySuccess = async () => {
+      const intent = rejoinVerificationRef.current;
+      if (!intent) return;
+      
+      if (intent.type === 'caregiver-found') {
+        setStep('caregiver-found');
+      } else if (intent.type === 'rejoin-complete' && intent.profile && intent.code) {
+        if (onRejoinWithCode) {
+          const success = await onRejoinWithCode(intent.code, intent.profile, selectedRole!);
+          if (!success) {
+            // Rejoin failed - go back to rejoin step to show error
+            setStep('rejoin');
+          }
+        }
+      }
+    };
+
     return (
       <OTPVerification
         phoneNumber={useEmailForRejoin ? undefined : `+91${phone || normalizePhone(rejoinPhone)}`}
         email={useEmailForRejoin ? email : undefined}
-        onVerifySuccess={() => {}}
+        onVerifySuccess={handleRejoinVerifySuccess}
         onBack={() => setStep(selectedRole === UserRole.CAREGIVER && !rejoinPhone ? 'lookup-caregiver' : 'rejoin')}
         onSendOTP={async (type, contact) => type === 'phone' ? await sendPhoneOTP(contact) : await sendEmailOTP(contact)}
-        onVerifyOTP={handleRejoinOTPVerify}
+        onVerifyOTP={handleRejoinOTPVerifyWrapper}
       />
     );
   }

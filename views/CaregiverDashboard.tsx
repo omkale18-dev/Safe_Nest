@@ -30,9 +30,9 @@ interface CaregiverDashboardProps {
   seniors?: { [householdId: string]: HouseholdMember };
   medicines?: Medicine[];
   medicineLogs?: MedicineLog[];
-  onAddMedicine?: (medicine: Medicine) => void;
-  onUpdateMedicine?: (medicine: Medicine) => void;
-  onDeleteMedicine?: (medicineId: string) => void;
+  onAddMedicine?: (medicine: Medicine) => Promise<void>;
+  onUpdateMedicine?: (medicine: Medicine) => Promise<void>;
+  onDeleteMedicine?: (medicineId: string) => Promise<void>;
   vitalReadings?: VitalReading[];
   onAddVital?: (vital: Omit<VitalReading, 'id' | 'timestamp'>) => void;
   // Doctor Appointments
@@ -206,10 +206,15 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
     return addr;
   })();
 
-  // Helper to get latest vital reading
-  const getLatestVital = (type: VitalReading['type']) => {
+  // Helper to get latest vital reading from TODAY only (to match SeniorHome)
+  const getLatestVitalToday = (type: VitalReading['type']) => {
+    const today = new Date();
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
     const filtered = vitalReadings
-      .filter(v => v.type === type)
+      .filter(v => {
+        const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
+        return v.type === type && v.source === 'manual' && vDate.getTime() >= todayStart;
+      })
       .sort((a, b) => {
         const dateA = a.timestamp instanceof Date ? a.timestamp : new Date(a.timestamp);
         const dateB = b.timestamp instanceof Date ? b.timestamp : new Date(b.timestamp);
@@ -218,11 +223,11 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
     return filtered[0];
   };
 
-  // Get latest vitals for dashboard display
-  const latestHR = getLatestVital('heartRate');
-  const latestSpO2 = getLatestVital('spo2');
-  const latestBP = getLatestVital('bloodPressure');
-  const latestBG = getLatestVital('bloodSugar');
+  // Get latest vitals for dashboard display - TODAY only
+  const latestHR = getLatestVitalToday('heartRate');
+  const latestSpO2 = getLatestVitalToday('spo2');
+  const latestBP = getLatestVitalToday('bloodPressure');
+  const latestBG = getLatestVitalToday('bloodSugar');
 
   const handleCallSenior = () => {
     if (stopAlert) stopAlert();
@@ -1068,6 +1073,7 @@ export const CaregiverDashboard: React.FC<CaregiverDashboardProps> = ({
             onUpdateAppointment={onUpdateAppointment || (() => {})}
             onDeleteAppointment={onDeleteAppointment || (() => {})}
             onBack={() => setActiveTab('home')}
+            userRole="caregiver"
           />
       )}
 

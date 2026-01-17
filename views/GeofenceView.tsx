@@ -283,8 +283,8 @@ export const GeofenceView: React.FC<GeofenceViewProps> = ({
 
       {/* Add Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-end justify-center z-50">
-          <div className="bg-white w-full max-w-md rounded-t-3xl p-6">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[100] p-4">
+          <div className="bg-white w-full max-w-md rounded-2xl p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-xl font-bold">Add Safe Zone</h2>
               <button onClick={() => { resetForm(); setShowAddModal(false); }} className="text-gray-400 text-2xl">&times;</button>
@@ -368,13 +368,22 @@ export const GeofenceView: React.FC<GeofenceViewProps> = ({
                 <MapPin size={16} className="inline mr-1" />
                 Will use your current location as the center
               </div>
+            </div>
 
+            {/* Save Button */}
+            <div className="mt-6 space-y-3">
               <button
                 onClick={handleAddGeofence}
                 disabled={!name || isLoading}
-                className="w-full py-4 bg-blue-500 text-white font-bold rounded-xl disabled:opacity-50"
+                className="w-full py-4 bg-blue-500 text-white font-bold rounded-xl disabled:opacity-50 shadow-lg"
               >
-                {isLoading ? 'Adding...' : 'Add Zone at Current Location'}
+                {isLoading ? 'Adding...' : '✓ Save Zone'}
+              </button>
+              <button
+                onClick={() => { resetForm(); setShowAddModal(false); }}
+                className="w-full py-3 bg-gray-100 text-gray-700 font-semibold rounded-xl"
+              >
+                Cancel
               </button>
             </div>
           </div>

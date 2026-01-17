@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Heart, Activity, MapPin, Zap, LogOut, Mic, Pill, AlertCircle, Plus, Thermometer, Gauge, Check, Clock, Droplets, Scale, Wind } from 'lucide-react';
+import { Heart, Activity, MapPin, Zap, LogOut, Pill, AlertCircle, Plus, Thermometer, Gauge, Check, Clock, Droplets, Scale, Wind, Calendar, Stethoscope } from 'lucide-react';
 import { ActivitySuggestions } from '../components/ActivitySuggestions';
 import { MedicineReminderModal } from '../components/MedicineReminderModal';
-import { SeniorStatus, UserProfile, Medicine, MedicineLog, VitalReading } from '../types';
+import { SeniorStatus, UserProfile, Medicine, MedicineLog, VitalReading, DoctorAppointment } from '../types';
 import { ManualVitalsEntry } from './ManualVitalsEntry';
 import { useLanguage } from '../i18n/LanguageContext';
 
@@ -19,14 +19,14 @@ interface SeniorHomeProps {
   onEditProfile: () => void;
   onToggleFallDetection: (enabled: boolean) => void;
   onToggleLocation: (enabled: boolean) => void;
-  onToggleVoiceEmergency?: (enabled: boolean) => void;
-  isVoiceEmergencyEnabled?: boolean;
   medicines?: Medicine[];
   medicineLogs?: MedicineLog[];
   onMarkTaken?: (medicineId: string, scheduledTime: string) => void;
   onSkipMedicine?: (medicineId: string, scheduledTime: string) => void;
   vitalReadings?: VitalReading[];
   onAddVital?: (vital: Omit<VitalReading, 'id' | 'timestamp'>) => void;
+  doctorAppointments?: DoctorAppointment[];
+  onUpdateAppointment?: (id: string, updates: Partial<DoctorAppointment>) => void;
 }
 
 export const SeniorHome: React.FC<SeniorHomeProps> = ({ 
@@ -40,14 +40,14 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
   onEditProfile,
   onToggleFallDetection,
   onToggleLocation,
-  onToggleVoiceEmergency,
-  isVoiceEmergencyEnabled = false,
   medicines = [],
   medicineLogs = [],
   onMarkTaken,
   onSkipMedicine,
   vitalReadings = [],
-  onAddVital
+  onAddVital,
+  doctorAppointments = [],
+  onUpdateAppointment
 }) => {
   const { t } = useLanguage();
   const [showVitalsEntry, setShowVitalsEntry] = useState(false);
@@ -56,11 +56,85 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
   const [showAllVitals, setShowAllVitals] = useState(false);
   const [medicineReminder, setMedicineReminder] = useState<{ medicine: Medicine; time: string } | null>(null);
   const medicineReminderRef = useRef<NodeJS.Timeout | null>(null);
+  const autoMissRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Auto-mark medicines as missed after 2 hours past scheduled time
+  useEffect(() => {
+    const checkAndAutoMiss = () => {
+      if (!onSkipMedicine || medicines.length === 0) return;
+      
+      const now = new Date();
+      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+      const AUTO_MISS_THRESHOLD_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+      medicines.forEach((medicine) => {
+        // Check if medicine is active today
+        const startDate = new Date(medicine.startDate);
+        const startMidnight = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
+        if (todayStart < startMidnight) return;
+        
+        const isActive = medicine.isOngoing === true || !medicine.endDate;
+        if (!isActive && medicine.endDate) {
+          const endDate = new Date(medicine.endDate);
+          const endMidnight = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime();
+          if (todayStart > endMidnight) return;
+        }
+
+        medicine.times.forEach((time) => {
+          const normalizeTime = (t: string) => {
+            const parts = t.split(':').map(s => parseInt(s, 10));
+            if (parts.length < 2) return t.trim();
+            return `${parts[0].toString().padStart(2,'0')}:${parts[1].toString().padStart(2,'0')}`;
+          };
+          
+          // Check if already logged
+          const log = medicineLogs?.find((l) => {
+            const logDate = l.date instanceof Date ? l.date : new Date(l.date);
+            const logMidnight = new Date(logDate.getFullYear(), logDate.getMonth(), logDate.getDate()).getTime();
+            return (
+              l.medicineId === medicine.id &&
+              logMidnight === todayStart &&
+              normalizeTime(l.scheduledTime || '') === normalizeTime(time)
+            );
+          });
+
+          // If no log exists, check if it's past the auto-miss threshold
+          if (!log) {
+            const [hours, minutes] = time.split(':').map(Number);
+            const scheduledDate = new Date();
+            scheduledDate.setHours(hours, minutes, 0, 0);
+            const timeSinceScheduled = now.getTime() - scheduledDate.getTime();
+            
+            // Auto-mark as missed if 2+ hours have passed
+            if (timeSinceScheduled > AUTO_MISS_THRESHOLD_MS) {
+              console.log(`[AutoMiss] Marking ${medicine.name} at ${time} as missed (${Math.round(timeSinceScheduled / 60000)} mins overdue)`);
+              (onSkipMedicine as (id: string, time: string, markAsMissed: boolean) => void)(medicine.id, time, true);
+            }
+          }
+        });
+      });
+    };
+
+    // Check immediately and then every minute
+    checkAndAutoMiss();
+    autoMissRef.current = setInterval(checkAndAutoMiss, 60000);
+
+    return () => {
+      if (autoMissRef.current) {
+        clearInterval(autoMissRef.current);
+      }
+    };
+  }, [medicines, medicineLogs, onSkipMedicine]);
   
-  // Get latest vital reading of a specific type
-  const getLatestVital = (type: 'bloodPressure' | 'temperature' | 'weight' | 'heartRate' | 'spo2' | 'bloodSugar' | 'stress') => {
+  // Get latest vital reading of a specific type - ONLY from today
+  const getLatestVitalToday = (type: 'bloodPressure' | 'temperature' | 'weight' | 'heartRate' | 'spo2' | 'bloodSugar' | 'stress') => {
+    const today = new Date();
+    const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
     const filtered = vitalReadings
-      .filter(v => v.type === type && v.source === 'manual')
+      .filter(v => {
+        const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
+        return v.type === type && v.source === 'manual' && vDate.getTime() >= todayStart;
+      })
       .sort((a, b) => {
         const dateA = a.timestamp instanceof Date ? a.timestamp : new Date(a.timestamp);
         const dateB = b.timestamp instanceof Date ? b.timestamp : new Date(b.timestamp);
@@ -69,13 +143,13 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
     return filtered[0];
   };
 
-  const latestBP = getLatestVital('bloodPressure');
-  const latestTemp = getLatestVital('temperature');
-  const latestWeight = getLatestVital('weight');
-  const latestHR = getLatestVital('heartRate');
-  const latestSpO2 = getLatestVital('spo2');
-  const latestBloodSugar = getLatestVital('bloodSugar');
-  const latestStress = getLatestVital('stress');
+  const latestBP = getLatestVitalToday('bloodPressure');
+  const latestTemp = getLatestVitalToday('temperature');
+  const latestWeight = getLatestVitalToday('weight');
+  const latestHR = getLatestVitalToday('heartRate');
+  const latestSpO2 = getLatestVitalToday('spo2');
+  const latestBloodSugar = getLatestVitalToday('bloodSugar');
+  const latestStress = getLatestVitalToday('stress');
 
   const formatTimestamp = (timestamp: Date | string) => {
     const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
@@ -615,6 +689,158 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
         );
       })()}
 
+      {/* Upcoming Appointments */}
+      {(() => {
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        
+        // Filter for today and future UPCOMING appointments only
+        const upcomingAppointments = (doctorAppointments || [])
+          .filter(apt => {
+            if (apt.status !== 'UPCOMING') return false; // Only show UPCOMING status
+            const aptDate = apt.date instanceof Date ? apt.date : new Date(apt.date);
+            // Include all appointments from today onwards (not just future time)
+            const aptDayStart = new Date(aptDate.getFullYear(), aptDate.getMonth(), aptDate.getDate());
+            return aptDayStart >= todayStart;
+          })
+          .sort((a, b) => {
+            const dateA = a.date instanceof Date ? a.date : new Date(a.date);
+            const dateB = b.date instanceof Date ? b.date : new Date(b.date);
+            return dateA.getTime() - dateB.getTime();
+          })
+          .slice(0, 3); // Show max 3 upcoming
+
+        // Filter for COMPLETED appointments (today only)
+        const completedAppointments = (doctorAppointments || [])
+          .filter(apt => apt.status === 'COMPLETED')
+          .filter(apt => {
+            const aptDate = apt.date instanceof Date ? apt.date : new Date(apt.date);
+            return aptDate.toDateString() === now.toDateString();
+          })
+          .sort((a, b) => {
+            const dateA = a.date instanceof Date ? a.date : new Date(a.date);
+            const dateB = b.date instanceof Date ? b.date : new Date(b.date);
+            return dateB.getTime() - dateA.getTime();
+          });
+
+        return (
+          <div className="mt-6">
+            <div className="flex items-center gap-2 mb-3">
+              <Calendar size={20} className="text-teal-600" />
+              <h2 className="text-lg font-semibold text-gray-900">Upcoming Appointments</h2>
+            </div>
+            {upcomingAppointments.length === 0 ? (
+              <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200 text-center">
+                <Stethoscope size={24} className="text-gray-400 mx-auto mb-2" />
+                <p className="text-sm text-gray-500">No upcoming appointments</p>
+                <p className="text-xs text-gray-400 mt-1">Your caregiver can schedule appointments for you</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {upcomingAppointments.map((apt) => {
+                  const aptDate = apt.date instanceof Date ? apt.date : new Date(apt.date);
+                  const isToday = aptDate.toDateString() === now.toDateString();
+                  const isTomorrow = aptDate.toDateString() === new Date(now.getTime() + 86400000).toDateString();
+                  
+                  return (
+                    <div 
+                      key={apt.id} 
+                      className={`bg-white p-4 rounded-2xl shadow-sm border ${
+                        isToday ? 'border-teal-300 bg-teal-50' : 'border-gray-100'
+                      }`}
+                    >
+                      {isToday && (
+                        <div className="bg-teal-100 border border-teal-300 rounded-lg px-3 py-1.5 mb-3 flex items-center gap-2">
+                          <Clock size={14} className="text-teal-700" />
+                          <p className="text-xs font-bold text-teal-800">Today's Appointment!</p>
+                        </div>
+                      )}
+                      <div className="flex items-start gap-4">
+                        <div className={`w-12 h-12 rounded-full flex items-center justify-center ${
+                          isToday ? 'bg-teal-200 text-teal-700' : 'bg-blue-50 text-blue-600'
+                        }`}>
+                          <Stethoscope size={20} />
+                        </div>
+                        <div className="flex-1">
+                          <h3 className="font-bold text-gray-900">{apt.doctorName}</h3>
+                          {apt.specialty && (
+                            <p className="text-xs text-gray-500">{apt.specialty}</p>
+                          )}
+                          <div className="flex items-center gap-2 mt-2 text-xs text-gray-600">
+                            <Calendar size={12} />
+                            <span className="font-semibold">
+                              {isToday ? 'Today' : isTomorrow ? 'Tomorrow' : aptDate.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                            </span>
+                            <Clock size={12} className="ml-2" />
+                            <span className="font-semibold">{apt.time}</span>
+                          </div>
+                          {apt.hospitalName && (
+                            <p className="text-xs text-gray-500 mt-1">📍 {apt.hospitalName}</p>
+                          )}
+                          {apt.purpose && (
+                            <p className="text-xs text-gray-400 mt-1 italic">Purpose: {apt.purpose}</p>
+                          )}
+                          
+                          {/* Mark as Attended button for today's appointments */}
+                          {isToday && onUpdateAppointment && (
+                            <button
+                              onClick={() => onUpdateAppointment(apt.id, { status: 'COMPLETED' })}
+                              className="mt-3 w-full py-2.5 bg-green-500 hover:bg-green-600 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-colors"
+                            >
+                              <Check size={18} />
+                              <span>Mark as Attended</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Completed (Attended) Appointments Today */}
+            {completedAppointments.length > 0 && (
+              <div className="mt-4">
+                <h3 className="text-xs font-bold text-green-600 uppercase tracking-widest mb-3">✓ Attended Today</h3>
+                <div className="space-y-3 opacity-75">
+                  {completedAppointments.map((apt) => {
+                    const aptDate = apt.date instanceof Date ? apt.date : new Date(apt.date);
+                    
+                    return (
+                      <div 
+                        key={apt.id} 
+                        className="bg-green-50 p-4 rounded-2xl border border-green-200"
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className="w-12 h-12 rounded-full flex items-center justify-center bg-green-100 text-green-600">
+                            <Check size={20} />
+                          </div>
+                          <div className="flex-1">
+                            <h3 className="font-bold text-green-700">{apt.doctorName}</h3>
+                            {apt.specialty && (
+                              <p className="text-xs text-green-500">{apt.specialty}</p>
+                            )}
+                            <div className="flex items-center gap-2 mt-2 text-xs text-green-600">
+                              <Clock size={12} />
+                              <span className="font-semibold">{apt.time}</span>
+                              <span className="ml-2 bg-green-200 text-green-700 px-2 py-0.5 rounded-full text-xs font-bold">ATTENDED</span>
+                            </div>
+                            {apt.hospitalName && (
+                              <p className="text-xs text-green-500 mt-1">📍 {apt.hospitalName}</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Suggestions */}
       <ActivitySuggestions vitalReadings={vitalReadings} medicineLogs={medicineLogs} />
 
@@ -796,7 +1022,7 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
                         ? 'bg-red-100 text-red-700'
                         : 'bg-green-100 text-green-700'
                     }`}>
-                      {(latestSpO2.value as number) < 95 ? 'Low' : 'Normal'}
+                      {(latestSpO2.value as number) < 95 ? t.low : t.normal}
                     </span>
                   </div>
                   <div className="flex items-end gap-1">
@@ -852,7 +1078,7 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
                         ? 'bg-yellow-100 text-yellow-700'
                         : 'bg-green-100 text-green-700'
                     }`}>
-                      {(latestStress.value as number) > 70 ? 'High' : (latestStress.value as number) > 50 ? 'Moderate' : 'Low'}
+                      {(latestStress.value as number) > 70 ? t.high : (latestStress.value as number) > 50 ? t.moderate : t.low}
                     </span>
                   </div>
                   <div className="flex items-end gap-1">
@@ -902,25 +1128,6 @@ export const SeniorHome: React.FC<SeniorHomeProps> = ({
                 className={`w-12 h-6 rounded-full p-1 transition-colors duration-300 ${status.isFallDetectionEnabled ? 'bg-green-500' : 'bg-gray-300'}`}
             >
                 <div className={`w-4 h-4 bg-white rounded-full shadow-md transform transition-transform duration-300 ${status.isFallDetectionEnabled ? 'translate-x-6' : 'translate-x-0'}`}></div>
-            </button>
-          </div>
-          
-          {/* Voice Emergency Toggle */}
-          <div className="p-4 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-purple-100 flex items-center justify-center">
-                <Mic className="text-purple-600" size={20} />
-              </div>
-              <div>
-                <h3 className="font-semibold text-gray-900">Voice Emergency</h3>
-                <p className="text-xs font-normal text-gray-500">Detects shouts/loud sounds - {isVoiceEmergencyEnabled ? t.active : t.off}</p>
-              </div>
-            </div>
-            <button 
-                onClick={() => onToggleVoiceEmergency?.(!isVoiceEmergencyEnabled)}
-                className={`w-12 h-6 rounded-full p-1 transition-colors duration-300 ${isVoiceEmergencyEnabled ? 'bg-purple-500' : 'bg-gray-300'}`}
-            >
-                <div className={`w-4 h-4 bg-white rounded-full shadow-md transform transition-transform duration-300 ${isVoiceEmergencyEnabled ? 'translate-x-6' : 'translate-x-0'}`}></div>
             </button>
           </div>
           

@@ -201,8 +201,8 @@ export const ManualVitalsEntry: React.FC<ManualVitalsEntryProps> = ({ onSave, on
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
-      <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl max-h-[90vh] overflow-y-auto">
+    <div className="fixed inset-0 bg-black/50 z-[100] flex items-end sm:items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
+      <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl max-h-[85vh] overflow-y-auto mb-4">
         {/* Header */}
         <div className="sticky top-0 bg-white border-b border-gray-200 p-6 flex justify-between items-center rounded-t-2xl">
           <h3 className="text-2xl font-bold text-gray-900">Add Vitals</h3>

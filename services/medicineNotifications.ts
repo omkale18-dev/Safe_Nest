@@ -29,8 +29,10 @@ class MedicineNotificationService {
         id: 'medicine_reminders',
         name: 'Medicine Reminders',
         description: 'Notifications for medicine reminders',
-        importance: 5, // High importance
+        importance: 5, // High importance (5 = max)
         sound: 'default',
+        vibration: true,
+        visibility: 1, // Public visibility
       });
       this.channelCreated = true;
       console.log('[MedicineNotifications] Notification channel created');

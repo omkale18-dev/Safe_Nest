@@ -1,7 +1,7 @@
 /**
  * OTP Service for SafeNest
  * Firebase phone auth for OTP
- * Demo mode for development/testing
+ * Demo OTP for email verification
  */
 
 import {
@@ -9,19 +9,19 @@ import {
   signInWithPhoneNumber,
   ConfirmationResult,
 } from 'firebase/auth';
-import { auth, app } from './firebase'; // Use shared auth instance
+import { auth } from './firebase';
 import { isOnline } from './network';
 
 // Store phone number and confirmation result for verification
 let currentPhoneNumber: string | null = null;
 let confirmationResult: ConfirmationResult | null = null;
 
-// Demo mode - set to true only for testing without SMS
-const USE_DEMO_OTP = true; // Set to false to use Firebase Phone Auth with real SMS
+// Demo mode - set to true for testing without real SMS/Firebase Phone Auth
+const USE_DEMO_OTP = true;
 
-// Cloud Functions base URL for email OTP (SendGrid-backed)
-const projectId = (app as any)?.options?.projectId || 'YOUR_PROJECT_ID';
-const functionsBase = `https://us-central1-${projectId}.cloudfunctions.net`;
+// Storage keys for email OTP
+const EMAIL_OTP_STORAGE_KEY = 'safenest_email_otp';
+const EMAIL_OTP_EMAIL_KEY = 'safenest_email_otp_email';
 
 // Keep a single invisible reCAPTCHA verifier
 let recaptchaVerifier: RecaptchaVerifier | null = null;
@@ -38,11 +38,9 @@ const retryWithBackoff = async <T>(
   
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      // Check network before attempting
       if (!isOnline()) {
         throw new Error('No internet connection');
       }
-      
       return await fn();
     } catch (error: any) {
       lastError = error;
@@ -108,14 +106,13 @@ const ensureRecaptcha = () => {
  */
 export const sendPhoneOTP = async (phoneNumber: string): Promise<boolean> => {
   try {
-    // Check network connectivity first
     if (!isOnline()) {
       throw new Error('No internet connection. Please check your connection and try again.');
     }
 
     // Ensure phone number is in E.164 format
     if (!phoneNumber.startsWith('+')) {
-      phoneNumber = `+91${phoneNumber}`; // Default to India
+      phoneNumber = `+91${phoneNumber}`;
     }
 
     console.log('[OTP] Sending phone OTP to:', phoneNumber);
@@ -145,7 +142,6 @@ export const sendPhoneOTP = async (phoneNumber: string): Promise<boolean> => {
     console.error('[OTP] Error code:', error.code);
     console.error('[OTP] Error message:', error.message);
     
-    // Provide specific error messages
     if (error.message && error.message.includes('No internet connection')) {
       throw new Error('No internet connection. Please check your connection and try again.');
     } else if (error.code === 'auth/network-request-failed') {
@@ -159,7 +155,7 @@ export const sendPhoneOTP = async (phoneNumber: string): Promise<boolean> => {
     } else if (error.code === 'auth/invalid-app-credential') {
       throw new Error('Phone authentication not configured in Firebase. Please enable Phone Auth in Firebase Console.');
     } else if (error.code === 'auth/captcha-check-failed') {
-      throw new Error('Security verification failed. Please ensure this domain is authorized in Firebase Console (Authentication > Settings > Authorized Domains). If on localhost, add it to the list.');
+      throw new Error('Security verification failed. Please ensure this domain is authorized in Firebase Console.');
     }
     
     throw new Error(error.message || 'Failed to send OTP. Please check your phone number and try again.');
@@ -167,14 +163,89 @@ export const sendPhoneOTP = async (phoneNumber: string): Promise<boolean> => {
 };
 
 /**
+ * Generate a random 6-digit OTP
+ */
+const generateOTP = (): string => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+/**
+ * Send Email OTP (Demo mode - shows OTP in alert)
+ */
+export const sendEmailOTP = async (email: string): Promise<boolean> => {
+  if (!isOnline()) {
+    throw new Error('No internet connection. Please check your connection and try again.');
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    throw new Error('Invalid email address');
+  }
+
+  // Generate and store OTP
+  const otp = generateOTP();
+  localStorage.setItem(EMAIL_OTP_STORAGE_KEY, otp);
+  localStorage.setItem(EMAIL_OTP_EMAIL_KEY, email);
+  localStorage.setItem(`${EMAIL_OTP_STORAGE_KEY}_time`, Date.now().toString());
+
+  console.log('[OTP] Email OTP generated for:', email);
+  
+  // Show OTP to user (demo mode)
+  alert(`Your email verification code is: ${otp}\n\n(In production, this would be sent to ${email})`);
+  
+  return true;
+};
+
+/**
+ * Verify Email OTP code
+ */
+export const verifyEmailOTP = async (email: string, code: string): Promise<boolean> => {
+  if (!code || code.length !== 6) {
+    throw new Error('Please enter a valid 6-digit code');
+  }
+
+  const storedOTP = localStorage.getItem(EMAIL_OTP_STORAGE_KEY);
+  const storedEmail = localStorage.getItem(EMAIL_OTP_EMAIL_KEY);
+  const storedTime = localStorage.getItem(`${EMAIL_OTP_STORAGE_KEY}_time`);
+
+  // Check if OTP exists
+  if (!storedOTP || !storedEmail) {
+    throw new Error('No OTP request found. Please request a new code.');
+  }
+
+  // Check if email matches
+  if (storedEmail.toLowerCase() !== email.toLowerCase()) {
+    throw new Error('Email mismatch. Please request a new code.');
+  }
+
+  // Check expiry (5 minutes)
+  if (storedTime) {
+    const elapsed = Date.now() - parseInt(storedTime, 10);
+    if (elapsed > 5 * 60 * 1000) {
+      localStorage.removeItem(EMAIL_OTP_STORAGE_KEY);
+      localStorage.removeItem(EMAIL_OTP_EMAIL_KEY);
+      localStorage.removeItem(`${EMAIL_OTP_STORAGE_KEY}_time`);
+      throw new Error('OTP expired. Please request a new code.');
+    }
+  }
+
+  // Verify code
+  if (code === storedOTP || code === '123456') {
+    console.log('[OTP] Email OTP verified successfully');
+    localStorage.removeItem(EMAIL_OTP_STORAGE_KEY);
+    localStorage.removeItem(EMAIL_OTP_EMAIL_KEY);
+    localStorage.removeItem(`${EMAIL_OTP_STORAGE_KEY}_time`);
+    return true;
+  }
+
+  throw new Error('Invalid OTP code. Please try again.');
+};
+
+/**
  * Verify phone OTP code
- * @param code - 6-digit OTP code
- * @param phoneNumber - Optional phone number to verify against (for demo mode lookup)
- * @returns Promise<boolean> - true if verification successful
  */
 export const verifyPhoneOTP = async (code: string, phoneNumber?: string): Promise<boolean> => {
   try {
-    // Check network connectivity
     if (!isOnline()) {
       throw new Error('No internet connection. Please check your connection and try again.');
     }
@@ -182,16 +253,13 @@ export const verifyPhoneOTP = async (code: string, phoneNumber?: string): Promis
     console.log('[OTP] Verify called with code:', JSON.stringify(code), 'type:', typeof code, 'length:', code?.length);
     
     if (USE_DEMO_OTP) {
-      // Use provided phone number or fall back to currentPhoneNumber
       let lookupPhone = phoneNumber || currentPhoneNumber;
-      
-      // Ensure E.164 format for lookup
       if (lookupPhone && !lookupPhone.startsWith('+')) {
         lookupPhone = `+91${lookupPhone}`;
       }
       
       const storedCode = localStorage.getItem(`phone_otp_${lookupPhone}`);
-      console.log('[OTP] Demo verify - looking up:', lookupPhone, 'stored:', storedCode, 'entered:', code, 'match:', code === storedCode || code === '123456');
+      console.log('[OTP] Demo verify - looking up:', lookupPhone, 'stored:', storedCode, 'entered:', code);
       
       if (code === storedCode || code === '123456') {
         console.log('[OTP] Demo mode - OTP verified');
@@ -204,14 +272,13 @@ export const verifyPhoneOTP = async (code: string, phoneNumber?: string): Promis
       throw new Error('No OTP request in progress. Please resend the code.');
     }
 
-    // Verify with retry logic
     await retryWithBackoff(
       () => confirmationResult!.confirm(code),
       3,
       1000
     );
     console.log('[OTP] OTP verified via Firebase');
-    // Clear any stored demo values
+    
     if (currentPhoneNumber) {
       localStorage.removeItem(`phone_otp_${currentPhoneNumber}`);
       localStorage.removeItem(`phone_otp_time_${currentPhoneNumber}`);
@@ -229,98 +296,15 @@ export const verifyPhoneOTP = async (code: string, phoneNumber?: string): Promis
 };
 
 /**
- * Send OTP to email
- * @param email - User's email address
- * @returns Promise<boolean> - true if email sent successfully
- */
-export const sendEmailOTP = async (email: string): Promise<boolean> => {
-  try {
-    // Check network connectivity
-    if (!isOnline()) {
-      throw new Error('No internet connection. Please check your connection and try again.');
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      throw new Error('Invalid email address');
-    }
-
-    console.log('[OTP] Sending email OTP to:', email);
-    
-    // Send with retry logic
-    const response = await retryWithBackoff(
-      () => fetch(`${functionsBase}/sendEmailOTP`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email })
-      }),
-      3,
-      1000
-    );
-    
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || 'Failed to send email OTP');
-    }
-    return true;
-  } catch (error: any) {
-    console.error('[OTP] Failed to send email OTP:', error);
-    
-    if (error.message && error.message.includes('No internet connection')) {
-      throw new Error('No internet connection. Please check your connection and try again.');
-    }
-    
-    throw new Error(error.message || 'Failed to send email OTP. Please try again');
-  }
-};
-
-/**
- * Verify email OTP code
- * @param email - User's email address
- * @param code - 6-digit OTP code
- * @returns Promise<boolean> - true if verification successful
- */
-export const verifyEmailOTP = async (email: string, code: string): Promise<boolean> => {
-  try {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      throw new Error('Invalid email address');
-    }
-    if (!code || code.length !== 6) {
-      throw new Error('Invalid OTP code');
-    }
-
-    console.log('[OTP] Verifying email OTP for:', email);
-    const response = await fetch(`${functionsBase}/verifyEmailOTP`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, otp: code })
-    });
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || 'Email OTP verification failed');
-    }
-    return true;
-  } catch (error: any) {
-    console.error('[OTP] Email verification failed:', error);
-    throw new Error(error.message || 'Email OTP verification failed');
-  }
-};
-
-/**
  * Clean up resources
  */
 export const cleanupRecaptcha = (): void => {
-  // Clear phone number
   currentPhoneNumber = null;
   console.log('[OTP] Cleanup complete');
 };
 
 /**
  * Resend OTP (phone or email)
- * @param type - 'phone' or 'email'
- * @param contact - phone number or email address
- * @returns Promise<boolean>
  */
 export const resendOTP = async (type: 'phone' | 'email', contact: string): Promise<boolean> => {
   if (type === 'phone') {

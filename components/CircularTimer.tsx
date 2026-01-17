@@ -33,7 +33,7 @@ export const CircularTimer: React.FC<CircularTimerProps> = ({
     }, 1000);
 
     return () => clearInterval(timerId);
-  }, [timeLeft, isActive]);
+  }, [timeLeft, isActive, onComplete]);
 
   return (
     <div className="relative flex items-center justify-center">

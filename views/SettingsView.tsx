@@ -14,7 +14,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSignOut, onJoinAno
   
   // Load persisted settings from localStorage
   const [fallSensitivity, setFallSensitivity] = useState(() => 
-    localStorage.getItem('safenest_fall_sensitivity') || 'Medium'
+    localStorage.getItem('fall_detection_sensitivity') || 'LOW'
   );
   const [notifications, setNotifications] = useState(() => 
     localStorage.getItem('safenest_notifications') !== 'false'
@@ -31,9 +31,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSignOut, onJoinAno
   );
 
   // Persist fall sensitivity when changed
-  const handleSensitivityChange = (level: string) => {
-    setFallSensitivity(level);
-    localStorage.setItem('safenest_fall_sensitivity', level);
+  const handleSensitivityChange = async (level: string) => {
+    const upperLevel = level.toUpperCase() as 'LOW' | 'MEDIUM' | 'HIGH';
+    setFallSensitivity(upperLevel);
+    // Import and call the service function to properly save to both localStorage and Preferences
+    try {
+      const { setFallSensitivity: saveFallSensitivity } = await import('../services/fallDetection');
+      await saveFallSensitivity(upperLevel);
+    } catch (e) {
+      console.error('Failed to set fall sensitivity:', e);
+      localStorage.setItem('fall_detection_sensitivity', upperLevel);
+    }
   };
 
   // Persist notifications when changed
@@ -69,12 +77,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSignOut, onJoinAno
     // Language selection limited to English, Hindi, Marathi
   
   const getSensitivityDescription = (level: string) => {
-    switch(level) {
-      case 'Low':
+    switch(level.toUpperCase()) {
+      case 'LOW':
         return '📊 Only major falls & loud shouts detected. Best for active seniors.';
-      case 'High':
+      case 'HIGH':
         return '⚠️ Very sensitive. Detects minor falls & quieter sounds.';
-      case 'Medium':
+      case 'MEDIUM':
       default:
         return '✓ Balanced sensitivity. Recommended for most seniors.';
     }
@@ -90,44 +98,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onSignOut, onJoinAno
         <section>
              <h2 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3 px-1">{t.safetyDetection}</h2>
              <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                <div className="p-4 border-b border-gray-100">
-                    <div className="flex items-center gap-3 mb-4">
-                        <div className="bg-blue-100 p-2 rounded-lg text-blue-600">
-                            <Activity size={20} />
-                        </div>
-                        <div className="flex-1">
-                            <p className="font-semibold text-gray-900">{t.fallSensitivity}</p>
-                            <p className="text-xs text-gray-500">{t.adjustDetection}</p>
-                        </div>
-                    </div>
-                    
-                    {/* One-line Sensitivity Selector */}
-                    <div className="flex gap-2">
-                        {['Low', 'Medium', 'High'].map((level) => (
-                            <button
-                                key={level}
-                                onClick={() => handleSensitivityChange(level)}
-                                className={`flex-1 py-2 px-3 rounded-lg font-semibold text-sm transition-all ${
-                                    fallSensitivity === level
-                                        ? 'bg-green-500 text-white shadow-lg'
-                                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                                }`}
-                            >
-                                {level}
-                            </button>
-                        ))}
-                    </div>
-                
-                </div>
-
                 <div className="p-4 border-b border-gray-100 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <div className="bg-purple-100 p-2 rounded-lg text-purple-600">
                             <Mic size={20} />
                         </div>
                         <div>
-                            <p className="font-semibold text-gray-900">Voice Emergency</p>
-                            <p className="text-xs text-gray-500">Detect shouts/loud sounds after fall</p>
+                            <p className="font-semibold text-gray-900">{t.voiceEmergency}</p>
+                            <p className="text-xs text-gray-500">{t.detectShouts}</p>
                         </div>
                     </div>
                     <label className="relative inline-flex items-center cursor-pointer active:scale-95 transition-transform">

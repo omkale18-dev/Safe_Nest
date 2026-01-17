@@ -4,6 +4,11 @@ interface VoiceEmergencyConfig {
   onEmergencyDetected: () => void;
 }
 
+// Global flag to track if microphone permission was granted
+let microphonePermissionGranted = false;
+// Global stream to reuse (avoids multiple getUserMedia calls)
+let globalMicrophoneStream: MediaStream | null = null;
+
 class VoiceEmergencyDetector {
   private audioContext: AudioContext | null = null;
   private analyser: AnalyserNode | null = null;
@@ -18,30 +23,85 @@ class VoiceEmergencyDetector {
     this.config = config;
   }
 
-  async startMonitoring(): Promise<boolean> {
-    if (this.isMonitoring) {
-      console.log('[VoiceEmergency] Already monitoring');
+  // Request microphone permission once and store the stream globally
+  async requestPermission(): Promise<boolean> {
+    // Check if existing stream is still active
+    if (microphonePermissionGranted && globalMicrophoneStream && globalMicrophoneStream.active) {
+      console.log('[VoiceEmergency] Permission already granted, reusing active stream');
       return true;
     }
 
-    // Check if mediaDevices is available (requires HTTPS or localhost)
+    // Stream became inactive, need to request fresh
+    if (globalMicrophoneStream && !globalMicrophoneStream.active) {
+      console.log('[VoiceEmergency] Previous stream inactive, requesting fresh stream...');
+      globalMicrophoneStream = null;
+      microphonePermissionGranted = false;
+    }
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      console.warn('[VoiceEmergency] getUserMedia not available (requires HTTPS or native app)');
+      console.error('[VoiceEmergency] getUserMedia not available');
       return false;
     }
 
     try {
-      // Request microphone permission
-      this.stream = await navigator.mediaDevices.getUserMedia({ 
+      console.log('[VoiceEmergency] Requesting microphone permission...');
+      globalMicrophoneStream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           echoCancellation: false,
           noiseSuppression: false,
           autoGainControl: false
         } 
       });
+      microphonePermissionGranted = true;
+      console.log('[VoiceEmergency] ✓ Microphone permission granted and stream stored, active:', globalMicrophoneStream.active);
+      return true;
+    } catch (error: any) {
+      console.error('[VoiceEmergency] Permission denied:', error?.name, error?.message);
+      microphonePermissionGranted = false;
+      globalMicrophoneStream = null;
+      return false;
+    }
+  }
+
+  async startMonitoring(): Promise<boolean> {
+    if (this.isMonitoring) {
+      console.log('[VoiceEmergency] Already monitoring');
+      return true;
+    }
+
+    // Check if mediaDevices is available
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      console.error('[VoiceEmergency] getUserMedia not available');
+      return false;
+    }
+
+    // Check if stream is still active, if not request fresh permission
+    if (!globalMicrophoneStream || !globalMicrophoneStream.active) {
+      console.log('[VoiceEmergency] No active stream, requesting permission...');
+      const granted = await this.requestPermission();
+      if (!granted) {
+        console.error('[VoiceEmergency] Could not get microphone permission');
+        return false;
+      }
+    }
+
+    try {
+      console.log('[VoiceEmergency] Starting monitoring with existing stream...');
+      
+      // Reuse the global stream (no additional getUserMedia call)
+      this.stream = globalMicrophoneStream;
+      
+      console.log('[VoiceEmergency] ✓ Using stored microphone stream, active:', this.stream?.active);
 
       // Create audio context and analyser
       this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      
+      // Resume audio context if suspended (required by some browsers/Capacitor)
+      if (this.audioContext.state === 'suspended') {
+        console.log('[VoiceEmergency] Resuming suspended audio context...');
+        await this.audioContext.resume();
+      }
+      
       this.analyser = this.audioContext.createAnalyser();
       this.analyser.fftSize = 512;
       this.analyser.smoothingTimeConstant = 0.8;
@@ -51,14 +111,19 @@ class VoiceEmergencyDetector {
       this.microphone.connect(this.analyser);
 
       this.isMonitoring = true;
-      console.log('[VoiceEmergency] Started monitoring');
+      console.log('[VoiceEmergency] ✓ Started monitoring (threshold:', this.config.volumeThreshold, 'dB)');
 
       // Start checking audio levels
       this.checkInterval = setInterval(() => this.checkAudioLevel(), 100);
 
       return true;
-    } catch (error) {
-      console.error('[VoiceEmergency] Failed to start monitoring:', error);
+    } catch (error: any) {
+      console.error('[VoiceEmergency] Failed to start monitoring:', error?.name, error?.message);
+      if (error?.name === 'NotAllowedError') {
+        console.error('[VoiceEmergency] Microphone permission was denied');
+      } else if (error?.name === 'NotFoundError') {
+        console.error('[VoiceEmergency] No microphone found on this device');
+      }
       return false;
     }
   }
@@ -119,10 +184,9 @@ class VoiceEmergencyDetector {
       this.microphone = null;
     }
 
-    if (this.stream) {
-      this.stream.getTracks().forEach(track => track.stop());
-      this.stream = null;
-    }
+    // DON'T stop the stream - keep it alive for reuse
+    // Just disconnect from it
+    this.stream = null;
 
     if (this.audioContext) {
       this.audioContext.close();
@@ -132,7 +196,7 @@ class VoiceEmergencyDetector {
     this.analyser = null;
     this.isMonitoring = false;
     this.consecutiveHighVolumeCount = 0;
-    console.log('[VoiceEmergency] Stopped monitoring');
+    console.log('[VoiceEmergency] Stopped monitoring (keeping stream alive for reuse)');
   }
 
   isActive(): boolean {

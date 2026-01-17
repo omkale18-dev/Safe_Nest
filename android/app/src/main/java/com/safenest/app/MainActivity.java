@@ -13,6 +13,7 @@ import com.getcapacitor.BridgeActivity;
 import com.safenest.app.falldetection.FallDetectionPlugin;
 import com.safenest.app.falldetection.FallDetectionService;
 import com.safenest.app.fit.GoogleFitPlugin;
+import com.safenest.app.geofence.GeofencePlugin;
 import com.safenest.app.reminders.MedicineRemindersPlugin;
 import com.safenest.app.reminders.MedicineReminderReceiver;
 
@@ -25,6 +26,11 @@ public class MainActivity extends BridgeActivity {
 	public void onCreate(Bundle savedInstanceState) {
 		super.onCreate(savedInstanceState);
 		
+		// Enable WebView debugging
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+			android.webkit.WebView.setWebContentsDebuggingEnabled(true);
+		}
+		
 		Log.d(TAG, "MainActivity onCreate");
 		
 		// Create notification channels FIRST before registering plugins
@@ -36,12 +42,13 @@ public class MainActivity extends BridgeActivity {
 		registerPlugin(FallDetectionPlugin.class);
 		registerPlugin(GoogleFitPlugin.class);
 		registerPlugin(MedicineRemindersPlugin.class);
+		registerPlugin(GeofencePlugin.class);
 		
-		// Check if launched from fall detection
+		// Check if launched from fall detection or notification action
 		handleFallDetectionIntent(getIntent());
 		
-		// Always start fall detection service on app launch so background detection is active
-		autoStartFallDetection();
+		// DO NOT auto-start fall detection - let JS control this based on user role
+		// The JS code will call startFallDetection() only for seniors
 	}
 	
 	private void createNotificationChannels() {
@@ -100,7 +107,23 @@ public class MainActivity extends BridgeActivity {
 	}
 
 	private void handleFallDetectionIntent(Intent intent) {
-		if (intent != null && intent.getBooleanExtra("fall_detected", false)) {
+		if (intent == null) return;
+		
+		// Handle "I'm OK" button pressed
+		if (intent.getBooleanExtra("fall_user_ok", false)) {
+			Log.d(TAG, "User pressed I'm OK button!");
+			triggerFallActionToJS("fallUserOk");
+			return;
+		}
+		
+		// Handle "Need Help" button pressed
+		if (intent.getBooleanExtra("fall_need_help", false)) {
+			Log.d(TAG, "User pressed Need Help button!");
+			triggerFallActionToJS("fallNeedHelp");
+			return;
+		}
+		
+		if (intent.getBooleanExtra("fall_detected", false)) {
 			Log.d(TAG, "Fall detected intent received!");
 			
 			// Turn on screen and show over lockscreen
@@ -146,38 +169,84 @@ public class MainActivity extends BridgeActivity {
 	
 	private void triggerWidgetSOSWithRetry() {
 		new Thread(() -> {
-			final int delayMs = 500;     // Retry every 500ms
-			final int maxRetries = 30;   // Try for up to 15 seconds
+			final int delayMs = 300;     // Retry every 300ms (faster)
+			final int maxRetries = 15;   // Try for up to 4.5 seconds
 			
 			for (int attempt = 1; attempt <= maxRetries; attempt++) {
+				// Stop if SOS was already handled (cleared after successful trigger)
+				if (!pendingWidgetSOS) {
+					Log.d(TAG, "Widget SOS retry stopped - already triggered successfully");
+					return;
+				}
+				
 				final int currentAttempt = attempt;
 				try {
-					Thread.sleep(delayMs);
+					// First attempt immediately, then wait
+					if (attempt > 1) {
+						Thread.sleep(delayMs);
+					}
+					final boolean[] triggered = {false};
 					runOnUiThread(() -> {
-						if (getBridge() != null) {
+						if (getBridge() != null && pendingWidgetSOS) {
 							Log.d(TAG, "Attempt " + currentAttempt + " - Triggering widgetSOS event to JS");
 							getBridge().triggerWindowJSEvent("widgetSOS", "{}");
-						} else {
+							triggered[0] = true;
+							// Clear flag after first successful trigger
+							pendingWidgetSOS = false;
+						} else if (getBridge() == null) {
 							Log.d(TAG, "Attempt " + currentAttempt + " - Bridge not ready yet");
 						}
 					});
+					// Stop loop after successful trigger
+					if (triggered[0]) {
+						Log.d(TAG, "Widget SOS triggered successfully, stopping retry loop");
+						return;
+					}
 				} catch (InterruptedException e) {
 					Log.e(TAG, "Widget SOS retry interrupted", e);
 					return;
 				}
 			}
-			Log.d(TAG, "Widget SOS retry loop finished");
+			Log.d(TAG, "Widget SOS retry loop finished after max attempts");
 		}).start();
 	}
 	
-	// Call this method from JS after the widgetSOS event is received
+	private void triggerFallActionToJS(final String eventName) {
+		new Thread(() -> {
+			final int delayMs = 500;
+			final int maxRetries = 20;  // 10 seconds max
+			
+			for (int attempt = 1; attempt <= maxRetries; attempt++) {
+				final int currentAttempt = attempt;
+				try {
+					Thread.sleep(delayMs);
+					final boolean[] triggered = {false};
+					runOnUiThread(() -> {
+						if (getBridge() != null) {
+							Log.d(TAG, "Attempt " + currentAttempt + " - Triggering " + eventName + " event to JS");
+							getBridge().triggerWindowJSEvent(eventName, "{}");
+							triggered[0] = true;
+						} else {
+							Log.d(TAG, "Attempt " + currentAttempt + " - Bridge not ready for " + eventName);
+						}
+					});
+					if (triggered[0]) {
+						Log.d(TAG, eventName + " event sent successfully");
+						return;
+					}
+				} catch (InterruptedException e) {
+					Log.e(TAG, eventName + " retry interrupted", e);
+					return;
+				}
+			}
+		}).start();
+	}
+	
+	// onResume callback - don't clear pendingWidgetSOS here since the retry thread handles it
 	@Override
 	public void onResume() {
 		super.onResume();
-		// Clear the flag on resume to prevent infinite loops
-		if (pendingWidgetSOS) {
-			Log.d(TAG, "onResume - Clearing pending widget SOS flag");
-			pendingWidgetSOS = false;
-		}
+		Log.d(TAG, "onResume - pendingWidgetSOS: " + pendingWidgetSOS);
+		// Note: pendingWidgetSOS is cleared by triggerWidgetSOSWithRetry after successful trigger
 	}
 }

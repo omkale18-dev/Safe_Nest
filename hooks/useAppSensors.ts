@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { LocationData } from '../types';
 import { Capacitor } from '@capacitor/core';
 import { Geolocation, PermissionStatus as GeoPermissionStatus, Position as CapPosition } from '@capacitor/geolocation';
+import { emitFallDetected } from '../services/fallDetection';
 
 interface SensorConfig {
   isMonitoring: boolean; // Global master switch
@@ -287,73 +288,64 @@ export const useAppSensors = ({
     }
   }, [isMonitoring, locationEnabled]);
 
-  useEffect(() => {
-    if (!isMonitoring) return;
+  // Memoize callbacks to prevent effect re-runs
+  const memoizedOnFallDetected = useCallback(onFallDetected, []);
+  const memoizedOnSOSTriggered = useCallback(onSOSTriggered, []);
 
-    // --- 2. Fall Detection (Accelerometer) ---
-    // Get sensitivity setting from localStorage
-    const sensitivity = localStorage.getItem('safenest_fall_sensitivity') || 'Medium';
-    
-    // Adjust thresholds based on sensitivity
-    let IMPACT_THRESHOLD = 55; // Medium default ~5.5G
-    let JERK_THRESHOLD = 18;
-    
-    if (sensitivity === 'High') {
-      IMPACT_THRESHOLD = 40; // More sensitive - lower threshold
-      JERK_THRESHOLD = 12;
-    } else if (sensitivity === 'Low') {
-      IMPACT_THRESHOLD = 70; // Less sensitive - higher threshold
-      JERK_THRESHOLD = 25;
+  useEffect(() => {
+    if (!isMonitoring || !fallDetectionEnabled) {
+      console.log('[useAppSensors] Not monitoring fall detection');
+      return;
     }
-    
-    const IMPACT_WINDOW_MS = 450; // window to accumulate 2 spikes
-    const COOLDOWN_MS = 6000;
-    let lastTime = 0;
-    let lastAlertTime = 0;
+
+    console.log('[useAppSensors] Starting fall detection monitoring');
+
+    // --- 2. Real Fall Detection (Accelerometer) ---
+    // Detect actual falls: sudden high acceleration spike (impact)
+    const IMPACT_THRESHOLD = 25; // High acceleration = impact
+    const COOLDOWN_MS = 3000; // 3 second cooldown
+    let lastFallTime = 0;
     let lastAccel = 0;
-    let impactCount = 0;
-    let windowStart = 0;
+    let consecutiveHighAccel = 0;
 
     const handleMotion = (event: DeviceMotionEvent) => {
-      // Guard: Check if fall detection is actually enabled
       if (!fallDetectionEnabled) return;
 
       const { x, y, z } = event.accelerationIncludingGravity || { x: 0, y: 0, z: 0 };
-      if (!x || !y || !z) return;
+      if (x === null || x === undefined || y === null || y === undefined || z === null || z === undefined) return;
 
       const currentTime = Date.now();
-      if ((currentTime - lastTime) < 100) return; 
-      lastTime = currentTime;
-
       const totalAcceleration = Math.sqrt(x * x + y * y + z * z);
-      const jerk = Math.abs(totalAcceleration - lastAccel);
-      lastAccel = totalAcceleration;
-
-      const inCooldown = currentTime - lastAlertTime < COOLDOWN_MS;
-      if (inCooldown) return;
-
-      const isStrongImpact = totalAcceleration > IMPACT_THRESHOLD && jerk > JERK_THRESHOLD;
-      if (!isStrongImpact) return;
-
-      // Accumulate two strong spikes within a short window to confirm a fall
-      if (currentTime - windowStart > IMPACT_WINDOW_MS) {
-        impactCount = 0;
-        windowStart = currentTime;
+      
+      // Log only when acceleration is high (potential fall)
+      if (totalAcceleration > 20) {
+        console.log('[Fall] High Accel:', totalAcceleration.toFixed(1));
       }
-
-      impactCount += 1;
-      if (impactCount >= 2) {
-        lastAlertTime = currentTime;
-        impactCount = 0;
-        console.log("Fall Impact Detected:", totalAcceleration, "jerk:", jerk);
+      
+      // Count consecutive high acceleration readings (sign of impact/fall, not shaking)
+      if (totalAcceleration > IMPACT_THRESHOLD) {
+        consecutiveHighAccel++;
+      } else {
+        consecutiveHighAccel = 0;
+      }
+      
+      // Real fall: need at least 2 consecutive high acceleration readings
+      // This filters out single shakes but catches real impacts
+      if (consecutiveHighAccel >= 2 && (currentTime - lastFallTime) > COOLDOWN_MS) {
+        console.log('[Fall] ✅ REAL FALL DETECTED - Accel:', totalAcceleration.toFixed(1));
+        lastFallTime = currentTime;
+        consecutiveHighAccel = 0; // Reset counter
+        emitFallDetected();
+        memoizedOnFallDetected();
+        
         if (typeof navigator.vibrate === 'function') {
-            navigator.vibrate([500, 200, 500, 200, 500]); 
+          navigator.vibrate([200, 100, 200]); 
         }
-        onFallDetected();
       }
+      lastAccel = totalAcceleration;
     };
 
-    // --- 3. Hardware SOS (Volume Button Proxy) ---
+    // --- 3. Hardware SOS (Volume Button) ---
     const handleKeyDown = (event: KeyboardEvent) => {
       if (['AudioVolumeUp', 'AudioVolumeDown', ' '].includes(event.key)) {
         const now = Date.now();
@@ -368,23 +360,48 @@ export const useAppSensors = ({
           if (typeof navigator.vibrate === 'function') {
              navigator.vibrate(200); 
           }
-          onSOSTriggered();
+          memoizedOnSOSTriggered();
           volumePressCount.current = 0;
         }
       }
     };
 
-    // Only attach fall detection listener if fall detection is enabled
-    if (window.DeviceMotionEvent && fallDetectionEnabled) {
-      window.addEventListener('devicemotion', handleMotion);
-    }
-    window.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      window.removeEventListener('devicemotion', handleMotion);
-      window.removeEventListener('keydown', handleKeyDown);
+    // Request motion permission first (important for iOS 13+)
+    const requestPermission = async () => {
+      if (typeof DeviceMotionEvent !== 'undefined' && typeof (DeviceMotionEvent as any).requestPermission === 'function') {
+        try {
+          const permission = await (DeviceMotionEvent as any).requestPermission();
+          if (permission !== 'granted') {
+            console.log('[useAppSensors] Motion permission denied');
+            return;
+          }
+        } catch (e) {
+          console.error('[useAppSensors] Permission request failed:', e);
+          return;
+        }
+      }
+      
+      // Permission granted or not needed, attach listeners
+      if (typeof DeviceMotionEvent !== 'undefined' && window.DeviceMotionEvent) {
+        console.log('[useAppSensors] ✓ Attaching devicemotion listener');
+        window.addEventListener('devicemotion', handleMotion, true);
+      } else {
+        console.warn('[useAppSensors] DeviceMotionEvent not supported');
+      }
+      window.addEventListener('keydown', handleKeyDown);
     };
-  }, [isMonitoring, fallDetectionEnabled, onFallDetected, onSOSTriggered]);
+
+    // Call async function immediately, return cleanup function
+    requestPermission();
+
+    // Return cleanup that removes listeners
+    return () => {
+      console.log('[useAppSensors] Cleaning up fall detection');
+      window.removeEventListener('devicemotion', handleMotion as any, true);
+      window.removeEventListener('keydown', handleKeyDown as any);
+    };
+
+  }, [isMonitoring, fallDetectionEnabled, memoizedOnFallDetected, memoizedOnSOSTriggered]);
 
   // Return the permission requester to be used in UI
   return { location, isSupported, batteryLevel, requestMotionPermission, requestLocationPermission };

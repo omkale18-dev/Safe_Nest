@@ -53,14 +53,14 @@ export const ErrorBoundary: React.FC<Props> = ({ children }) => {
           <p className="text-center text-gray-600 mb-6">We're sorry, but SafeNest encountered an unexpected error. Please try again.</p>
           {(import.meta as any).env?.DEV && error && (
             <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6 max-h-40 overflow-auto">
-              <p className="text-xs font-mono text-red-700">
+              <div className="text-xs font-mono text-red-700">
                 <strong>Error:</strong> {error.toString()}
-              </p>
+              </div>
               {stack && (
-                <p className="text-xs font-mono text-red-600 mt-2">
+                <div className="text-xs font-mono text-red-600 mt-2">
                   <strong>Stack:</strong>
                   <pre className="mt-1 whitespace-pre-wrap break-words">{stack}</pre>
-                </p>
+                </div>
               )}
             </div>
           )}

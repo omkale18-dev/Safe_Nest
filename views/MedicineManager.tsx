@@ -45,9 +45,9 @@ const findTimeConflicts = (
 
 interface MedicineManagerProps {
   medicines: Medicine[];
-  onAddMedicine: (medicine: Medicine) => void;
-  onUpdateMedicine: (medicine: Medicine) => void;
-  onDeleteMedicine: (medicineId: string) => void;
+  onAddMedicine: (medicine: Medicine) => Promise<void>;
+  onUpdateMedicine: (medicine: Medicine) => Promise<void>;
+  onDeleteMedicine: (medicineId: string) => Promise<void>;
 }
 
 export const MedicineManager: React.FC<MedicineManagerProps> = ({
@@ -103,7 +103,7 @@ export const MedicineManager: React.FC<MedicineManagerProps> = ({
     });
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     
     if (!formData.name?.trim()) {
@@ -174,9 +174,9 @@ export const MedicineManager: React.FC<MedicineManagerProps> = ({
     };
 
     if (editingId) {
-      onUpdateMedicine(medicine);
+      await onUpdateMedicine(medicine);
     } else {
-      onAddMedicine(medicine);
+      await onAddMedicine(medicine);
     }
 
     resetForm();

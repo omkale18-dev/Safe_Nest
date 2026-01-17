@@ -22,6 +22,16 @@
             </intent-filter>
         </receiver>
 
+        <!-- Fall Detection Action Receiver (Notification buttons) -->
+        <receiver
+            android:name=".falldetection.FallActionReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.safenest.app.ACTION_IM_OK" />
+                <action android:name="com.safenest.app.ACTION_NEED_HELP" />
+            </intent-filter>
+        </receiver>
+
         <activity
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
             android:name=".MainActivity"
@@ -96,6 +106,25 @@
                 android:name="android.appwidget.provider"
                 android:resource="@xml/widget_panic_button_info" />
         </receiver>
+        
+        <!-- Geofence Broadcast Receiver (Background safe zone monitoring) -->
+        <receiver
+            android:name=".geofence.GeofenceBroadcastReceiver"
+            android:exported="true" />
+            
+        <!-- Accessibility Service for Volume Button SOS -->
+        <service
+            android:name=".accessibility.VolumeButtonSOSService"
+            android:exported="true"
+            android:label="SafeNest Volume Button SOS"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
     </application>
 
     <!-- Permissions -->

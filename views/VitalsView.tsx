@@ -3,6 +3,7 @@ import { Droplet, CheckCircle, HelpCircle, Activity, RefreshCw, Thermometer, Gau
 import { SeniorStatus, VitalReading } from '../types';
 import { ManualVitalsEntry } from './ManualVitalsEntry';
 import { useStepCounter } from '../hooks/useStepCounter';
+import { useLanguage } from '../i18n/LanguageContext';
 
 interface VitalsViewProps {
   status: SeniorStatus;
@@ -23,9 +24,9 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
   enteredBy = 'senior',
   householdId
 }) => {
+  const { t } = useLanguage();
   const [showVitalsEntry, setShowVitalsEntry] = useState(false);
-  const [cooldownUntil, setCooldownUntil] = useState<Date | null>(null);
-  const [remainingTime, setRemainingTime] = useState<string>('');
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [stepTarget, setStepTarget] = useState<number>(() => {
     return parseInt(localStorage.getItem('safenest_step_target') || '5000', 10);
   });
@@ -46,108 +47,36 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
     localStorage.setItem('safenest_step_target', stepTarget.toString());
   }, [stepTarget]);
 
-  // Check cooldown on mount and when vitalReadings or householdId changes
-  React.useEffect(() => {
-    if (!householdId) return;
-    
-    const lastEntryKey = `vitalsLastCompletedEntry_${householdId}`;
-    const lastEntryStr = localStorage.getItem(lastEntryKey);
-    if (lastEntryStr) {
-      const lastEntry = new Date(lastEntryStr);
-      const cooldownEnd = new Date(lastEntry.getTime() + 1 * 24 * 60 * 60 * 1000);
-      const now = new Date();
-      if (now < cooldownEnd) {
-        setCooldownUntil(cooldownEnd);
-      } else {
-        // Cooldown has expired
-        setCooldownUntil(null);
-        localStorage.removeItem(lastEntryKey);
-      }
-    }
-  }, [vitalReadings, householdId]);
-
-  // Update remaining time every minute
-  React.useEffect(() => {
-    if (!cooldownUntil || !householdId) return;
-    
-    const updateTimer = () => {
-      const now = new Date();
-      const diff = cooldownUntil.getTime() - now.getTime();
-      
-      if (diff <= 0) {
-        setCooldownUntil(null);
-        setRemainingTime('');
-        localStorage.removeItem(`vitalsLastCompletedEntry_${householdId}`);
-        
-        // Clear today's vitals tracking when cooldown expires
-        const today = new Date().toDateString();
-        localStorage.removeItem(`vitals_entered_${householdId}_${today}`);
-        return;
-      }
-      
-      const days = Math.floor(diff / (24 * 60 * 60 * 1000));
-      const hours = Math.floor((diff % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
-      const mins = Math.floor((diff % (60 * 60 * 1000)) / (60 * 1000));
-      
-      setRemainingTime(`${days}d ${hours}h ${mins}m`);
-    };
-    
-    updateTimer();
-    const interval = setInterval(updateTimer, 60000); // Update every minute
-    return () => clearInterval(interval);
-  }, [cooldownUntil, householdId]);
-
-  // Check if today is different from stored date, reset if needed
-  React.useEffect(() => {
-    if (!householdId) return;
-    
-    const lastEntryKey = `vitalsLastCompletedEntry_${householdId}`;
-    const lastEntryStr = localStorage.getItem(lastEntryKey);
-    if (lastEntryStr) {
-      const lastEntry = new Date(lastEntryStr);
-      const lastEntryDate = lastEntry.toDateString();
-      const today = new Date().toDateString();
-      
-      // If it's a new day after cooldown expires, clear old tracking
-      if (lastEntryDate !== today) {
-        localStorage.removeItem(`vitals_entered_${householdId}_${lastEntryDate}`);
-      }
-    }
-  }, [householdId]);
-
   // Get vitals for a specific date
   const getVitalsForDate = (date: Date) => {
     const targetDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+    const dayStart = targetDate.getTime();
+    const dayEnd = dayStart + (24 * 60 * 60 * 1000);
+    
     return {
       bp: vitalReadings?.find(v => {
         const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
-        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
-        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'bloodPressure';
+        return vDate.getTime() >= dayStart && vDate.getTime() < dayEnd && v.type === 'bloodPressure' && v.source === 'manual';
       }),
       temp: vitalReadings?.find(v => {
         const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
-        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
-        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'temperature';
+        return vDate.getTime() >= dayStart && vDate.getTime() < dayEnd && v.type === 'temperature' && v.source === 'manual';
       }),
       weight: vitalReadings?.find(v => {
         const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
-        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
-        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'weight';
+        return vDate.getTime() >= dayStart && vDate.getTime() < dayEnd && v.type === 'weight' && v.source === 'manual';
       }),
       bg: vitalReadings?.find(v => {
         const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
-        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
-        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'bloodSugar';
+        return vDate.getTime() >= dayStart && vDate.getTime() < dayEnd && v.type === 'bloodSugar' && v.source === 'manual';
       }),
       hr: vitalReadings?.find(v => {
         const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
-        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
-        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'heartRate';
+        return vDate.getTime() >= dayStart && vDate.getTime() < dayEnd && v.type === 'heartRate' && v.source === 'manual';
       }),
       spo2: vitalReadings?.find(v => {
         const vDate = v.timestamp instanceof Date ? v.timestamp : new Date(v.timestamp);
-        const normalizedDate = new Date(vDate.getFullYear(), vDate.getMonth(), vDate.getDate());
-        return normalizedDate.getTime() === targetDate.getTime() && v.type === 'spo2';
+        return vDate.getTime() >= dayStart && vDate.getTime() < dayEnd && v.type === 'spo2' && v.source === 'manual';
       }),
     };
   };
@@ -175,16 +104,19 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
     return filtered[0];
   };
 
-  // Get vitals for selected date or latest
+  // Get vitals for selected date or today's vitals (not latest from previous days)
   const selectedDateVitals = getVitalsForDate(selectedDate);
+  const todaysVitals = getVitalsForDate(new Date()); // Today's actual vitals
   const isViewingSelectedDate = selectedDate.toDateString() !== new Date().toDateString();
   
-  const latestBP = isViewingSelectedDate ? selectedDateVitals.bp : getLatestVital('bloodPressure');
-  const latestTemp = isViewingSelectedDate ? selectedDateVitals.temp : getLatestVital('temperature');
-  const latestWeight = isViewingSelectedDate ? selectedDateVitals.weight : getLatestVital('weight');
-  const latestBG = isViewingSelectedDate ? selectedDateVitals.bg : getLatestVital('bloodSugar');
-  const latestHR = isViewingSelectedDate ? selectedDateVitals.hr : getLatestVital('heartRate');
-  const latestSpO2 = isViewingSelectedDate ? selectedDateVitals.spo2 : getLatestVital('spo2');
+  // Show selected date vitals, or today's vitals (not previous day's data)
+  // If today has no data, show null (undefined) instead of previous day's data
+  const latestBP = isViewingSelectedDate ? selectedDateVitals.bp : todaysVitals.bp;
+  const latestTemp = isViewingSelectedDate ? selectedDateVitals.temp : todaysVitals.temp;
+  const latestWeight = isViewingSelectedDate ? selectedDateVitals.weight : todaysVitals.weight;
+  const latestBG = isViewingSelectedDate ? selectedDateVitals.bg : todaysVitals.bg;
+  const latestHR = isViewingSelectedDate ? selectedDateVitals.hr : todaysVitals.hr;
+  const latestSpO2 = isViewingSelectedDate ? selectedDateVitals.spo2 : todaysVitals.spo2;
 
   const formatTimestamp = (timestamp: Date | string) => {
     const date = timestamp instanceof Date ? timestamp : new Date(timestamp);
@@ -199,31 +131,31 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
     return date.toLocaleDateString();
   };
 
+  const handleManualRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      if (onRefresh) {
+        await onRefresh();
+      }
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
   const handleSaveVital = (vital: Omit<VitalReading, 'id' | 'timestamp'>) => {
     if (onAddVital && householdId) {
       onAddVital(vital);
     }
     
-    if (!householdId) return;
-    
-    // Store entry in localStorage for immediate tracking (household-specific)
-    const today = new Date().toDateString();
-    const storedKey = `vitals_entered_${householdId}_${today}`;
-    const storedEntered = JSON.parse(localStorage.getItem(storedKey) || '[]') as string[];
-    if (!storedEntered.includes(vital.type)) {
-      storedEntered.push(vital.type);
-    }
-    localStorage.setItem(storedKey, JSON.stringify(storedEntered));
-    
-    // Check if all 4 vitals are now entered today
-    if (storedEntered.length === 4) {
-      const now = new Date();
-      localStorage.setItem(`vitalsLastCompletedEntry_${householdId}`, now.toISOString());
-      const cooldownEnd = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
-      setCooldownUntil(cooldownEnd);
-    }
-    
     setShowVitalsEntry(false);
+    // Reset to today's view after saving
+    setSelectedDate(new Date());
+    
+    // Refresh vitals data from Firebase after saving
+    if (onRefresh) {
+      // Use a longer delay to ensure Firebase has updated
+      setTimeout(() => onRefresh(), 2000);
+    }
   };
 
   return (
@@ -232,8 +164,13 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
       {/* Header */}
       <div className="flex justify-between items-center mb-2">
         <h1 className="text-3xl font-black text-gray-900">Vitals</h1>
-        <button className="text-gray-400 hover:text-gray-600">
-           <HelpCircle size={24} />
+        <button 
+          onClick={handleManualRefresh}
+          disabled={isRefreshing}
+          className="text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
+          title="Refresh vitals data"
+        >
+           <RefreshCw size={24} className={isRefreshing ? 'animate-spin' : ''} />
         </button>
       </div>
 
@@ -481,7 +418,7 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
                     ? 'bg-red-100 text-red-700' 
                     : 'bg-green-100 text-green-700'
                 }`}>
-                    {(latestBG.value as number) > 180 ? 'High' : (latestBG.value as number) < 70 ? 'Low' : 'Normal'}
+                    {(latestBG.value as number) > 180 ? t.high : (latestBG.value as number) < 70 ? t.low : t.normal}
                 </span>
             </div>
 
@@ -510,7 +447,7 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
                     ? 'bg-red-100 text-red-700' 
                     : 'bg-green-100 text-green-700'
                 }`}>
-                    {(latestSpO2.value as number) < 95 ? 'Low' : 'Normal'}
+                    {(latestSpO2.value as number) < 95 ? t.low : t.normal}
                 </span>
             </div>
 
@@ -539,7 +476,7 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
                     ? 'bg-yellow-100 text-yellow-700' 
                     : 'bg-green-100 text-green-700'
                 }`}>
-                    {(latestHR.value as number) > 100 ? 'High' : (latestHR.value as number) < 60 ? 'Low' : 'Normal'}
+                    {(latestHR.value as number) > 100 ? t.high : (latestHR.value as number) < 60 ? t.low : t.normal}
                 </span>
             </div>
 
@@ -627,29 +564,11 @@ export const VitalsView: React.FC<VitalsViewProps> = ({
           </p>
       </div>
 
-      {/* Cooldown Message */}
-      {cooldownUntil && (
-        <div className="fixed bottom-32 left-4 right-4 bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 shadow-lg z-30">
-          <div className="flex items-start gap-3">
-            <div className="text-2xl mt-0.5">⏱️</div>
-            <div>
-              <p className="font-bold text-amber-900">You've completed all 6 vitals!</p>
-              <p className="text-sm text-amber-700 mt-1">Come back in <span className="font-bold">{remainingTime}</span> to log again.</p>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Add Vitals Button (Floating) */}
       {onAddVital && (
         <button
           onClick={() => setShowVitalsEntry(true)}
-          disabled={!!cooldownUntil}
-          className={`fixed bottom-24 right-6 w-14 h-14 rounded-full shadow-lg flex items-center justify-center text-white transition-all active:scale-95 z-40 ${
-            cooldownUntil
-              ? 'bg-gray-300 opacity-50 cursor-not-allowed'
-              : 'bg-gradient-to-br from-blue-500 to-blue-600 shadow-blue-300 hover:shadow-xl'
-          }`}
+          className="fixed bottom-24 right-6 w-14 h-14 rounded-full shadow-lg flex items-center justify-center text-white transition-all active:scale-95 z-40 bg-gradient-to-br from-blue-500 to-blue-600 shadow-blue-300 hover:shadow-xl"
           aria-label="Add Vitals"
         >
           <Plus size={28} strokeWidth={2.5} />

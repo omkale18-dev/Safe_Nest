@@ -20,7 +20,7 @@ export const DoctorAppointmentsView: React.FC<DoctorAppointmentsViewProps> = ({
   onUpdateAppointment,
   onDeleteAppointment,
   onBack,
-  userRole
+  userRole = 'senior'
 }) => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);

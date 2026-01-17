@@ -11,6 +11,7 @@ import { LocationView } from './views/LocationView';
 import { ContactsView } from './views/ContactsView';
 import { SettingsView } from './views/SettingsView';
 import { VitalsView } from './views/VitalsView';
+import { DoctorAppointmentsView } from './views/DoctorAppointmentsView';
 import { VoiceCompanionView } from './views/VoiceCompanionView';
 import { MedicineManager } from './views/MedicineManager';
 import { MedicineCompliance } from './views/MedicineCompliance';
@@ -24,12 +25,12 @@ import { LocalNotifications, PermissionStatus as LNPermissionStatus } from '@cap
 import { FirstTimeSetup } from './views/FirstTimeSetup';
 import { OnboardingScreen } from './views/OnboardingScreen';
 import { db, initializeAuth } from './services/firebase';
-import { ref, set, onValue, off, get } from 'firebase/database';
+import { ref, set, onValue, off, get, update } from 'firebase/database';
 import { backgroundLocationService } from './services/backgroundLocationService';
 import { HouseholdLink } from './views/HouseholdLink';
 import { HouseholdMember, Contact } from './types';
 import { FirebaseMessaging } from '@capacitor-firebase/messaging';
-import { startFallDetection, stopFallDetection, subscribeFallDetected } from './services/fallDetection';
+import { startFallDetection, stopFallDetection, subscribeFallDetected, subscribeFallUserOk, subscribeFallNeedHelp } from './services/fallDetection';
 import VoiceEmergencyDetector from './services/voiceEmergency';
 import { 
   initVolumeButtonShortcut, 
@@ -110,12 +111,19 @@ const deserializeMedicineLog = (log: any) => ({ ...log, date: new Date(log.date)
 let setAppStatusGlobal: ((status: AppStatus) => void) | null = null;
 let pendingWidgetEvent = false;
 let currentAppStatusGlobal: AppStatus = AppStatus.IDLE;
+let lastSOSDismissalTime = 0; // Track when SOS was last dismissed
 
 const handleModuleLevelWidgetSOS = () => {
   console.log('[Widget] Module-level widget SOS received!');
   // Avoid duplicate triggers if already in SOS flow
   if (currentAppStatusGlobal === AppStatus.WARNING_SOS || currentAppStatusGlobal === AppStatus.EMERGENCY) {
     console.log('[Widget] Ignoring duplicate SOS (already active)');
+    return;
+  }
+  // Check if SOS was dismissed recently (30 second cooldown)
+  const timeSinceDismissal = Date.now() - lastSOSDismissalTime;
+  if (timeSinceDismissal < 30000) {
+    console.log('[Widget] Ignoring SOS - dismissed too recently (within 30s)');
     return;
   }
   pendingWidgetEvent = true;
@@ -172,6 +180,12 @@ const App = () => {
         console.log('[Widget] Early handler ignoring duplicate SOS');
         return;
       }
+      // Check if SOS was dismissed recently (30 second cooldown)
+      const timeSinceDismissal = Date.now() - lastSOSDismissalTime;
+      if (timeSinceDismissal < 30000) {
+        console.log('[Widget] Early handler ignoring SOS - dismissed recently');
+        return;
+      }
       // Set SOS status immediately, before role/household checks
       setAppStatus(AppStatus.WARNING_SOS);
       console.log('[Widget] Set app status to WARNING_SOS');
@@ -211,7 +225,7 @@ const App = () => {
   const [seniorStatus, setSeniorStatus] = useState<SeniorStatus>(INITIAL_SENIOR_STATUS);
   const [isFitConnected, setIsFitConnected] = useState<boolean>(false);
   
-  // Cleanup old cached steps data on app load
+  // Cleanup old cached steps data on app load and initialize default sensitivity
   useEffect(() => {
     // Clear old step cache from localStorage to reset from fresh accelerometer data
     const today = new Date().toDateString();
@@ -228,6 +242,13 @@ const App = () => {
       } catch (e) {
         localStorage.removeItem(stepsKey);
       }
+    }
+    
+    // Initialize default fall detection sensitivity to LOW if not set
+    const currentSensitivity = localStorage.getItem('fall_detection_sensitivity');
+    if (!currentSensitivity) {
+      localStorage.setItem('fall_detection_sensitivity', 'LOW');
+      console.log('[App] Initialized fall detection sensitivity to LOW');
     }
   }, []);
   
@@ -323,15 +344,15 @@ const App = () => {
 
   // Helper to get volume threshold based on sensitivity setting
   const getVolumeThresholdFromSensitivity = (): number => {
-    const sensitivity = localStorage.getItem('safenest_fall_sensitivity') || 'Medium';
+    const sensitivity = localStorage.getItem('fall_detection_sensitivity') || 'LOW';
     switch (sensitivity) {
       case 'Low':
-        return 80; // Less sensitive - only very loud shouts
+        return 60; // Less sensitive - only very loud shouts
       case 'High':
-        return 70; // More sensitive - loud talking
+        return 45; // More sensitive - loud talking
       case 'Medium':
       default:
-        return 75; // Balanced
+        return 50; // User requested 50dB threshold
     }
   };
 
@@ -357,28 +378,11 @@ const App = () => {
       if (shouldBeEnabled !== isVoiceEmergencyEnabled) {
         console.log('[App] Voice emergency setting changed in localStorage:', shouldBeEnabled);
         setIsVoiceEmergencyEnabled(shouldBeEnabled);
-        
-        // Start monitoring if enabled and senior role
-        if (shouldBeEnabled && role === UserRole.SENIOR && !voiceDetectorRef.current?.isMonitoring) {
-          const threshold = getVolumeThresholdFromSensitivity();
-          if (!voiceDetectorRef.current) {
-            voiceDetectorRef.current = new VoiceEmergencyDetector({
-              volumeThreshold: threshold,
-              durationMs: 300,
-              onEmergencyDetected: () => {
-                console.log('[App] Voice emergency detected!');
-                setAppStatus(AppStatus.WARNING_FALL);
-              }
-            });
-          }
-          voiceDetectorRef.current.startMonitoring();
-          console.log('[App] Voice emergency monitoring started from settings change');
-        }
       }
     };
     
-    // Check every 500ms
-    const interval = setInterval(checkVoiceEmergencyStatus, 500);
+    // Check every 2 seconds (less aggressive)
+    const interval = setInterval(checkVoiceEmergencyStatus, 2000);
     return () => clearInterval(interval);
   }, [isVoiceEmergencyEnabled, role]);
 
@@ -1258,89 +1262,49 @@ const App = () => {
     };
   }, []);
 
-  // Background fall detection via native foreground service
+  // Auto-enable fall detection for seniors on app load
   useEffect(() => {
-    if (role === UserRole.SENIOR && currentUser.role === UserRole.SENIOR && householdId && seniorStatus.isFallDetectionEnabled) {
-      startFallDetection();
+    const isSenior = role === UserRole.SENIOR && currentUser.role === UserRole.SENIOR;
+    if (isSenior && !seniorStatus.isFallDetectionEnabled) {
+      console.log('[Fall] Auto-enabling fall detection for senior');
+      setSeniorStatus(prev => ({ ...prev, isFallDetectionEnabled: true }));
+    }
+  }, [role, currentUser.role]);
+
+  // Simple fall detection listener
+  useEffect(() => {
+    const isSenior = role === UserRole.SENIOR && currentUser.role === UserRole.SENIOR;
+    if (!isSenior || !seniorStatus.isFallDetectionEnabled) return;
+
+    console.log('[Fall] Setting up fall detection listener');
+    startFallDetection();
+
+    // Listen for fall detection events from accelerometer
+    const unsubscribe = subscribeFallDetected(() => {
+      const currentEnabled = seniorStatusRef.current.isFallDetectionEnabled;
+      const currentStatus = appStatusRef.current;
       
-      // Also start voice emergency monitoring if enabled in settings
-      const voiceEnabled = isVoiceEmergencyEnabledFromSettings();
-      if (voiceEnabled) {
-        const threshold = getVolumeThresholdFromSensitivity();
-        if (!voiceDetectorRef.current) {
-          voiceDetectorRef.current = new VoiceEmergencyDetector({
-            volumeThreshold: threshold,
-            durationMs: 300,
-            onEmergencyDetected: () => {
-              console.log('[App] Voice emergency detected!');
-              setAppStatus(AppStatus.WARNING_FALL);
-              setSeniorStatus(prev => ({ 
-                ...prev, 
-                status: 'Voice Distress Detected',
-                heartRate: 120 
-              }));
-              addActivity('EMERGENCY', 'Voice Distress', 'Loud sound/shout detected');
-            }
-          });
-        } else {
-          // Update threshold if detector exists
-          voiceDetectorRef.current.updateConfig({ volumeThreshold: threshold });
-        }
-        voiceDetectorRef.current.startMonitoring();
-        setIsVoiceEmergencyEnabled(true);
+      if (!currentEnabled) {
+        console.log('[Fall] Ignored - detection is disabled');
+        return;
       }
-      const unsubscribe = subscribeFallDetected(async () => {
-        // Use refs to get current values, not stale closure
-        const currentEnabled = seniorStatusRef.current.isFallDetectionEnabled;
-        const currentForeground = isAppInForeground;
-        const currentStatus = appStatusRef.current;
-        
-        console.log('[Fall] Native event received. Enabled:', currentEnabled, 'Foreground:', currentForeground, 'Status:', currentStatus);
-        
-        // Ignore if fall detection has been disabled
-        if (!currentEnabled) {
-          console.log('[Fall] Ignored - detection is disabled');
-          return;
-        }
 
-        // Ignore if dismissed recently (prevent infinite loop)
-        const timeSinceDismissal = Date.now() - emergencyDismissalTimeRef.current;
-        if (timeSinceDismissal < 2000) {
-          console.log('[Fall] Ignored - dismissed too recently');
-          return;
-        }
-        
-        // Clear any existing countdown timer
-        if (fallCountdownTimerRef.current) {
-          clearTimeout(fallCountdownTimerRef.current);
-        }
+      // Prevent duplicate alerts within 10 seconds
+      if (Date.now() - emergencyDismissalTimeRef.current < 10000) {
+        console.log('[Fall] Ignored - dismissed recently');
+        return;
+      }
 
-        // Always show in-app countdown when native event fires
-        console.log('[Fall] Setting app status to WARNING_FALL');
-        setAppStatus(AppStatus.WARNING_FALL);
-        addActivity('EMERGENCY', 'Fall Detected', 'Background detector');
-      });
-      return () => {
-        unsubscribe();
-        stopFallDetection();
-        if (voiceDetectorRef.current) {
-          voiceDetectorRef.current.stopMonitoring();
-          setIsVoiceEmergencyEnabled(false);
-        }
-        if (fallCountdownTimerRef.current) {
-          clearTimeout(fallCountdownTimerRef.current);
-        }
-      };
-    }
+      console.log('[Fall] Detected! Showing dialog...');
+      setAppStatus(AppStatus.WARNING_FALL);
+      addActivity('EMERGENCY', 'Fall Detected', 'By accelerometer');
+    });
 
-    // Stop service when not needed
-    stopFallDetection();
-    if (voiceDetectorRef.current) {
-      voiceDetectorRef.current.stopMonitoring();
-      setIsVoiceEmergencyEnabled(false);
-    }
-    return undefined;
-  }, [role, currentUser.role, householdId, seniorStatus.isFallDetectionEnabled, isAppInForeground]);
+    return () => {
+      unsubscribe();
+      stopFallDetection();
+    };
+  }, [role, currentUser.role, seniorStatus.isFallDetectionEnabled]);
 
   // --- Sensor Integration ---
   const { location, batteryLevel, requestMotionPermission } = useAppSensors({
@@ -1348,26 +1312,8 @@ const App = () => {
     fallDetectionEnabled: seniorStatus.isFallDetectionEnabled,
     locationEnabled: seniorStatus.isLocationSharingEnabled,
     onFallDetected: () => {
-      // Use ref to get current value
-      const currentEnabled = seniorStatusRef.current.isFallDetectionEnabled;
-      const currentStatus = appStatusRef.current;
-      
-      console.log('[Fall] JS callback triggered. Enabled:', currentEnabled, 'Status:', currentStatus);
-      
-      // Double-check fall detection is still enabled
-      if (!currentEnabled) {
-        console.log('[Fall] JS callback ignored - detection disabled');
-        return;
-      }
-      
-      // Don't override if already in emergency
-      if (currentStatus !== AppStatus.EMERGENCY) {
-        console.log('[Fall] JS: Setting WARNING_FALL');
-        setAppStatus(AppStatus.WARNING_FALL);
-        addActivity('EMERGENCY', 'Fall Detected', 'Accelerometer triggered');
-      } else {
-        console.log('[Fall] JS: Already in EMERGENCY, not showing countdown');
-      }
+      // This is called from accelerometer in useAppSensors
+      // Fall detection event is emitted via emitFallDetected() instead
     },
     onSOSTriggered: () => {
        if (appStatusRef.current === AppStatus.IDLE) {
@@ -1481,7 +1427,7 @@ const App = () => {
     setIsFirstTime(false);
   };
 
-  const handleRejoinWithCode = async (code: string, profile: UserProfile, selectedRole: UserRole) => {
+  const handleRejoinWithCode = async (code: string, profile: UserProfile, selectedRole: UserRole): Promise<boolean> => {
     setIsValidatingHousehold(true);
     setHouseholdError('');
     
@@ -1496,23 +1442,15 @@ const App = () => {
       console.log('[Rejoin] Checking if household exists...');
       const metaSnap = await get(ref(db, `households/${cleanCode}/meta`));
       if (!metaSnap.exists()) {
-        console.log('[Rejoin] Household not found');
+        console.log('[Rejoin] Household not found - auto-creating...');
         
-        // For caregivers, auto-create household so they can initialize it
-        if (selectedRole === UserRole.CAREGIVER) {
-          console.log('[Rejoin] Caregiver - auto-creating household...');
-          await set(ref(db, `households/${cleanCode}/meta`), {
-            createdBy: profile.name || 'Caregiver',
-            role: 'CAREGIVER',
-            updatedAt: new Date().toISOString(),
-          });
-          console.log('[Rejoin] Household created by caregiver');
-        } else {
-          // Seniors must join existing household (created by senior)
-          setHouseholdError('Household code not found. Please verify the code and try again.');
-          setIsValidatingHousehold(false);
-          return;
-        }
+        // Auto-create household for verified users
+        await set(ref(db, `households/${cleanCode}/meta`), {
+          createdBy: profile.name || (selectedRole === UserRole.CAREGIVER ? 'Caregiver' : 'Senior'),
+          role: selectedRole,
+          updatedAt: new Date().toISOString(),
+        });
+        console.log('[Rejoin] Household created');
       }
       console.log('[Rejoin] Household exists');
 
@@ -1540,7 +1478,7 @@ const App = () => {
         console.log('[Rejoin] Senior already linked to different household');
         setHouseholdError(`You are already linked to household "${existingHouseholdId}". Please sign out first to join a different household.`);
         setIsValidatingHousehold(false);
-        return;
+        return false;
       }
       
       // For caregivers, allow multiple households
@@ -1604,12 +1542,14 @@ const App = () => {
       setIsFirstTime(false);
       setHouseholdError('');
       console.log('[Rejoin] Success!');
+      return true;
       
     } catch (e) {
       console.error('[Rejoin Error]', e);
       console.error('[Rejoin Error Stack]', e instanceof Error ? e.stack : 'N/A');
       console.error('[Rejoin Error Details]', JSON.stringify(e));
       setHouseholdError(`Failed to join household: ${e instanceof Error ? e.message : 'Unknown error'}. Check your network connection and try again.`);
+      return false;
     } finally {
       setIsValidatingHousehold(false);
     }
@@ -1893,8 +1833,10 @@ const App = () => {
   useEffect(() => {
     if (!householdId) return;
     const medicinesRef = ref(db, `households/${householdId}/medicines`);
+    console.log('[App] Setting up medicines listener for household:', householdId);
     const unsub = onValue(medicinesRef, (snapshot) => {
       const data = snapshot.val();
+      console.log('[App] Medicines listener triggered for household:', householdId, 'data:', data);
       if (data) {
         const medicinesList = Object.values(data).map((med: any) => ({
           ...med,
@@ -1903,8 +1845,10 @@ const App = () => {
           createdAt: new Date(med.createdAt),
           updatedAt: new Date(med.updatedAt),
         })) as Medicine[];
+        console.log('[App] Medicines loaded:', medicinesList.length);
         setMedicines(medicinesList);
       } else {
+        console.log('[App] No medicines found for household');
         setMedicines([]);
       }
     });
@@ -1918,8 +1862,10 @@ const App = () => {
     const unsub = onValue(appointmentsRef, (snapshot) => {
       const data = snapshot.val();
       if (data) {
-        const appointmentsList = Object.values(data).map((apt: any) => ({
+        // Use Object.entries to preserve Firebase keys as IDs
+        const appointmentsList = Object.entries(data).map(([key, apt]: [string, any]) => ({
           ...apt,
+          id: key, // Use Firebase key as the ID
           date: apt.date ? new Date(apt.date) : new Date(),
           createdAt: apt.createdAt ? new Date(apt.createdAt) : new Date(),
         })) as DoctorAppointment[];
@@ -2018,6 +1964,69 @@ const App = () => {
     
     scheduleNotifications();
   }, [role, medicines]);
+
+  // Schedule doctor appointment notifications when appointments change
+  useEffect(() => {
+    if (role !== UserRole.SENIOR || doctorAppointments.length === 0) return;
+    
+    const scheduleAppointmentNotifications = async () => {
+      try {
+        // Cancel existing appointment notifications first
+        const pending = await LocalNotifications.getPending();
+        const appointmentNotifs = pending.notifications.filter(n => n.id >= 200000 && n.id < 300000);
+        if (appointmentNotifs.length > 0) {
+          await LocalNotifications.cancel({ notifications: appointmentNotifs.map(n => ({ id: n.id })) });
+        }
+
+        // Schedule notifications for upcoming appointments
+        const now = new Date();
+        const notifications = doctorAppointments
+          .filter(apt => {
+            const aptDate = apt.date instanceof Date ? apt.date : new Date(apt.date);
+            return aptDate > now;
+          })
+          .flatMap((apt, index) => {
+            const aptDate = apt.date instanceof Date ? apt.date : new Date(apt.date);
+            const notifs = [];
+            
+            // Reminder 1 day before
+            const dayBefore = new Date(aptDate.getTime() - 24 * 60 * 60 * 1000);
+            if (dayBefore > now) {
+              notifs.push({
+                id: 200000 + index * 10,
+                title: `📅 Appointment Tomorrow`,
+                body: `${apt.doctorName} at ${aptDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${apt.notes ? ` - ${apt.notes}` : ''}`,
+                schedule: { at: dayBefore },
+                sound: 'default',
+              });
+            }
+            
+            // Reminder 2 hours before
+            const hoursBefore = new Date(aptDate.getTime() - 2 * 60 * 60 * 1000);
+            if (hoursBefore > now) {
+              notifs.push({
+                id: 200000 + index * 10 + 1,
+                title: `📅 Appointment in 2 Hours`,
+                body: `${apt.doctorName}${apt.location ? ` at ${apt.location}` : ''}`,
+                schedule: { at: hoursBefore },
+                sound: 'default',
+              });
+            }
+            
+            return notifs;
+          });
+
+        if (notifications.length > 0) {
+          await LocalNotifications.schedule({ notifications });
+          console.log('[App] Appointment notifications scheduled:', notifications.length);
+        }
+      } catch (error) {
+        console.error('[App] Failed to schedule appointment notifications:', error);
+      }
+    };
+    
+    scheduleAppointmentNotifications();
+  }, [role, doctorAppointments]);
 
   // Subscribe to medicine logs
   useEffect(() => {
@@ -2173,8 +2182,10 @@ const App = () => {
       const appointmentsRef = ref(db, `households/${hId}/appointments`);
       const appointmentsUnsub = onValue(appointmentsRef, (snapshot) => {
         const data = snapshot.val();
-        const appointmentsList = data ? Object.values(data).map((apt: any) => ({
+        // Use Object.entries to preserve Firebase keys as IDs
+        const appointmentsList = data ? Object.entries(data).map(([key, apt]: [string, any]) => ({
           ...apt,
+          id: key, // Use Firebase key as the ID
           date: apt.date ? new Date(apt.date) : new Date(),
           createdAt: apt.createdAt ? new Date(apt.createdAt) : new Date(),
         })) as DoctorAppointment[] : [];
@@ -2266,15 +2277,30 @@ const App = () => {
   }, [role, householdId]);
 
   const handleCancelEmergency = useCallback(() => {
+    console.log('[Emergency] Cancel called, setting IDLE');
     setAppStatus(AppStatus.IDLE);
     setSeniorStatus(prev => ({ ...prev, status: 'Normal' }));
     addActivity('INFO', 'Emergency Cancelled', 'Marked safe by user');
-    // Set dismissal timestamp to prevent immediate re-triggering
+    // Set dismissal timestamp to prevent immediate re-triggering (30 second cooldown)
     emergencyDismissalTimeRef.current = Date.now();
+    lastSOSDismissalTime = Date.now(); // Also set global for widget SOS
+    
+    // Clear any pending countdown timers
+    if (fallCountdownTimerRef.current) {
+      clearTimeout(fallCountdownTimerRef.current);
+      fallCountdownTimerRef.current = null;
+    }
   }, []);
 
   // Medicine handlers
-  const handleAddMedicine = (medicine: Medicine) => {
+  const handleAddMedicine = async (medicine: Medicine) => {
+    const targetHouseholdId = role === UserRole.CAREGIVER ? (activeHouseholdId || householdId) : householdId;
+    console.log('[Medicine] handleAddMedicine called. role:', role, 'activeHouseholdId:', activeHouseholdId, 'householdId:', householdId, 'targetHouseholdId:', targetHouseholdId);
+    if (!targetHouseholdId) {
+      console.error('[Medicine] No household selected, cannot add medicine');
+      alert('Please select a household first');
+      return;
+    }
     const medicineId = Date.now().toString();
     const newMedicine = { ...medicine, id: medicineId };
     // Remove undefined values for Firebase
@@ -2283,13 +2309,22 @@ const App = () => {
         delete newMedicine[key as keyof Medicine];
       }
     });
-    set(ref(db, `households/${householdId}/medicines/${medicineId}`), newMedicine);
+    const dbPath = `households/${targetHouseholdId}/medicines/${medicineId}`;
+    console.log('[Medicine] Adding medicine to path:', dbPath, 'data:', newMedicine);
+    try {
+      await set(ref(db, dbPath), newMedicine);
+      console.log('[Medicine] ✓ Medicine saved to Firebase successfully at path:', dbPath);
+    } catch (error: any) {
+      console.error('[Medicine] ✗ Error saving medicine to Firebase:', error?.message || error);
+      alert('Error saving medicine: ' + (error?.message || 'Unknown error'));
+    }
   };
 
   const handleUpdateMedicine = async (medicine: Medicine) => {
     const targetHouseholdId = role === UserRole.CAREGIVER ? (activeHouseholdId || householdId) : householdId;
     if (!targetHouseholdId) {
       console.error('[Medicine] No household selected, cannot update medicine');
+      alert('Please select a household first');
       return;
     }
 
@@ -2300,11 +2335,31 @@ const App = () => {
         delete cleanMedicine[key as keyof Medicine];
       }
     });
-    set(ref(db, `households/${householdId}/medicines/${medicine.id}`), cleanMedicine);
+    console.log('[Medicine] Updating medicine in household:', targetHouseholdId, cleanMedicine);
+    try {
+      await set(ref(db, `households/${targetHouseholdId}/medicines/${medicine.id}`), cleanMedicine);
+      console.log('[Medicine] ✓ Medicine updated in Firebase successfully');
+    } catch (error) {
+      console.error('[Medicine] ✗ Error updating medicine in Firebase:', error);
+      alert('Error updating medicine. Please try again.');
+    }
   };
 
-  const handleDeleteMedicine = (medicineId: string) => {
-    set(ref(db, `households/${householdId}/medicines/${medicineId}`), null);
+  const handleDeleteMedicine = async (medicineId: string) => {
+    const targetHouseholdId = role === UserRole.CAREGIVER ? (activeHouseholdId || householdId) : householdId;
+    if (!targetHouseholdId) {
+      console.error('[Medicine] No household selected, cannot delete medicine');
+      alert('Please select a household first');
+      return;
+    }
+    console.log('[Medicine] Deleting medicine from household:', targetHouseholdId);
+    try {
+      await set(ref(db, `households/${targetHouseholdId}/medicines/${medicineId}`), null);
+      console.log('[Medicine] ✓ Medicine deleted from Firebase successfully');
+    } catch (error) {
+      console.error('[Medicine] ✗ Error deleting medicine from Firebase:', error);
+      alert('Error deleting medicine. Please try again.');
+    }
   };
 
   const handleMarkTaken = (medicineId: string, scheduledTime: string) => {
@@ -2437,6 +2492,7 @@ const App = () => {
       const appointmentData = {
         ...appointment,
         createdAt: new Date().toISOString(),
+        createdBy: role === UserRole.CAREGIVER ? 'caregiver' : 'senior',
         date: appointment.date instanceof Date ? appointment.date.toISOString() : appointment.date,
       };
 
@@ -2467,12 +2523,21 @@ const App = () => {
     }
 
     try {
-      const appointmentData = {
-        ...updates,
-        date: updates.date instanceof Date ? updates.date.toISOString() : updates.date,
-      };
-      await set(ref(db, `households/${targetHouseholdId}/appointments/${id}`), appointmentData);
-      console.log('[Appointment] Updated successfully:', id);
+      // Only update the fields that are provided
+      const updateData: Record<string, any> = {};
+      if (updates.status !== undefined) updateData.status = updates.status;
+      if (updates.doctorName !== undefined) updateData.doctorName = updates.doctorName;
+      if (updates.date !== undefined) {
+        updateData.date = updates.date instanceof Date ? updates.date.toISOString() : updates.date;
+      }
+      if (updates.time !== undefined) updateData.time = updates.time;
+      if (updates.specialty !== undefined) updateData.specialty = updates.specialty;
+      if (updates.hospitalName !== undefined) updateData.hospitalName = updates.hospitalName;
+      if (updates.purpose !== undefined) updateData.purpose = updates.purpose;
+      if (updates.notes !== undefined) updateData.notes = updates.notes;
+      
+      await update(ref(db, `households/${targetHouseholdId}/appointments/${id}`), updateData);
+      console.log('[Appointment] Updated successfully:', id, updateData);
     } catch (e) {
       console.error('[Appointment] Failed to update:', e);
     }
@@ -2495,7 +2560,8 @@ const App = () => {
 
   // Vitals handler
   const handleAddVital = (vital: Omit<VitalReading, 'id' | 'timestamp'>) => {
-    if (!householdId) {
+    const targetHouseholdId = role === UserRole.CAREGIVER ? (activeHouseholdId || householdId) : householdId;
+    if (!targetHouseholdId) {
       console.error('[handleAddVital] No householdId set, aborting');
       return;
     }
@@ -2517,8 +2583,8 @@ const App = () => {
       }
     });
     
-    console.log('[handleAddVital] Writing vital:', vitalForDB);
-    set(ref(db, `households/${householdId}/vitals/${vitalId}`), vitalForDB)
+    console.log('[handleAddVital] Writing vital to household:', targetHouseholdId, vitalForDB);
+    set(ref(db, `households/${targetHouseholdId}/vitals/${vitalId}`), vitalForDB)
       .then(() => {
         console.log('[handleAddVital] Write success:', vitalId);
         setVitalReadings(prev => [...prev, vitalWithId]);
@@ -2606,58 +2672,62 @@ const App = () => {
   }, [appStatus]);
 
   const ensureMicrophonePermission = async (): Promise<boolean> => {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      console.warn('[VoiceEmergency] Microphone not available in this environment');
+    if (!voiceDetectorRef.current) {
+      console.warn('[VoiceEmergency] Voice detector not initialized');
       return false;
     }
 
-    let stream: MediaStream | null = null;
     try {
-      // Request mic access to trigger native permission prompt on mobile
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      return true;
-    } catch (err) {
-      console.warn('[VoiceEmergency] Microphone permission denied', err);
-      alert('Microphone permission is required for Voice Emergency alerts. Please allow access and try again.');
-      return false;
-    } finally {
-      if (stream) {
-        stream.getTracks().forEach(track => track.stop());
+      // Use the detector's requestPermission method which handles it properly
+      const granted = await voiceDetectorRef.current.requestPermission();
+      if (!granted) {
+        console.error('[VoiceEmergency] Microphone permission not granted');
+        // Don't show alert here - let caller handle it
       }
+      return granted;
+    } catch (err) {
+      console.error('[VoiceEmergency] Permission request failed', err);
+      return false;
     }
   };
 
   const toggleSensor = async (sensor: 'fall' | 'location' | 'voice', enabled: boolean) => {
-      if (sensor === 'fall' && enabled) {
+      console.log(`[App] toggleSensor called: ${sensor} = ${enabled}`);
+      
+      if (sensor === 'fall') {
+        if (enabled) {
           const granted = await requestMotionPermission();
-          if (!granted) return; 
-      }
-
-      // If user turns fall detection off, proactively stop the native service and clear timers.
-      if (sensor === 'fall' && !enabled) {
-        stopFallDetection();
-        if (fallCountdownTimerRef.current) {
-          clearTimeout(fallCountdownTimerRef.current);
-          fallCountdownTimerRef.current = null;
-        }
-        // Reset status if in warning state
-        if (appStatus === AppStatus.WARNING_FALL) {
-          setAppStatus(AppStatus.IDLE);
+          console.log(`[App] Motion permission granted: ${granted}`);
+          if (!granted) {
+            console.log('[App] Motion permission denied, not enabling fall detection');
+            return;
+          }
+          // Start fall detection service
+          console.log('[App] Starting fall detection service');
+          startFallDetection();
+        } else {
+          // If user turns fall detection off, proactively stop the native service and clear timers.
+          console.log('[App] Stopping fall detection service');
+          stopFallDetection();
+          if (fallCountdownTimerRef.current) {
+            clearTimeout(fallCountdownTimerRef.current);
+            fallCountdownTimerRef.current = null;
+          }
+          // Reset status if in warning state
+          if (appStatus === AppStatus.WARNING_FALL) {
+            setAppStatus(AppStatus.IDLE);
+          }
         }
       }
       
       if (sensor === 'voice') {
         if (enabled) {
-          const micGranted = await ensureMicrophonePermission();
-          if (!micGranted) {
-            setIsVoiceEmergencyEnabled(false);
-            localStorage.setItem('safenest_voice_emergency', 'false');
-            return;
-          }
-
           // Start voice emergency detection with sensitivity from settings
           const threshold = getVolumeThresholdFromSensitivity();
+          
+          // Create detector if it doesn't exist
           if (!voiceDetectorRef.current) {
+            console.log('[App] Creating new voice detector');
             voiceDetectorRef.current = new VoiceEmergencyDetector({
               volumeThreshold: threshold,
               durationMs: 300, // 300ms of sustained loud sound
@@ -2674,17 +2744,34 @@ const App = () => {
             });
           } else {
             // Update threshold if detector already exists
+            console.log('[App] Updating existing detector threshold');
             voiceDetectorRef.current.updateConfig({ volumeThreshold: threshold });
           }
+
+          // Request microphone permission first (only prompts once)
+          console.log('[App] Requesting microphone permission...');
+          const micGranted = await ensureMicrophonePermission();
+          console.log('[App] Microphone permission result:', micGranted);
+          if (!micGranted) {
+            console.error('[App] Microphone permission denied');
+            setIsVoiceEmergencyEnabled(false);
+            localStorage.setItem('safenest_voice_emergency', 'false');
+            return;
+          }
+
+          // Now start monitoring with the permission
+          console.log('[App] Starting voice monitoring...');
           const started = await voiceDetectorRef.current.startMonitoring();
+          console.log('[App] Voice monitoring start result:', started);
           if (!started) {
+            console.error('[App] Voice emergency failed to start - microphone may not be available');
             setIsVoiceEmergencyEnabled(false);
             localStorage.setItem('safenest_voice_emergency', 'false');
             return;
           }
           setIsVoiceEmergencyEnabled(true);
           localStorage.setItem('safenest_voice_emergency', 'true');
-          console.log('[App] Voice emergency monitoring started with threshold:', threshold);
+          console.log('[App] ✓ Voice emergency monitoring started successfully with threshold:', threshold, 'dB');
         } else {
           // Stop voice emergency detection
           if (voiceDetectorRef.current) {
@@ -2711,6 +2798,22 @@ const App = () => {
           setIsListening(!isListening);
       }
   };
+
+  // Keep voice emergency detector in sync with the saved setting even after moving the toggle to Settings
+  useEffect(() => {
+    const syncVoiceEmergency = async () => {
+      const shouldEnable = localStorage.getItem('safenest_voice_emergency') !== 'false';
+      const isActive = voiceDetectorRef.current?.isActive() === true;
+
+      if (shouldEnable && !isActive) {
+        await toggleSensor('voice', true);
+      } else if (!shouldEnable && isActive) {
+        await toggleSensor('voice', false);
+      }
+    };
+
+    syncVoiceEmergency();
+  }, [isVoiceEmergencyEnabled]);
 
   // Logic to determine if we should show the bottom navigation
   const shouldShowNav = role === UserRole.SENIOR && 
@@ -2807,9 +2910,12 @@ const App = () => {
     }
 
     if (role === UserRole.CAREGIVER) {
-      const senior = householdMembers.find(m => m.role === UserRole.SENIOR);
       // Caregivers use activeHouseholdId directly (no fallback to householdId)
       const caregiverSelectedHouseholdId = activeHouseholdId || householdIds[0] || householdId || '';
+      
+      // Get the senior from the SELECTED household (from allHouseholdSeniors), not the caregiver's own household
+      const senior = caregiverSelectedHouseholdId ? allHouseholdSeniors[caregiverSelectedHouseholdId] : undefined;
+      
       const caregiverLogs = allMedicineLogs[caregiverSelectedHouseholdId] || [];
       const caregiverMeds = allMedicines[caregiverSelectedHouseholdId] || [];
       const caregiverAppts = allDoctorAppointments[caregiverSelectedHouseholdId] || [];
@@ -2818,6 +2924,7 @@ const App = () => {
         activeHouseholdId,
         'householdIds[0]': householdIds[0],
         householdId,
+        senior: senior?.name,
         medsCount: caregiverMeds.length,
         logsCount: caregiverLogs.length,
         allMedicinesKeys: Object.keys(allMedicines)
@@ -2898,14 +3005,14 @@ const App = () => {
               onEditProfile={() => setIsEditingProfile(true)}
               onToggleFallDetection={(val) => toggleSensor('fall', val)}
               onToggleLocation={(val) => toggleSensor('location', val)}
-              onToggleVoiceEmergency={(val) => toggleSensor('voice', val)}
-              isVoiceEmergencyEnabled={isVoiceEmergencyEnabled}
               medicines={medicines}
               medicineLogs={medicineLogs}
               onMarkTaken={handleMarkTaken}
               onSkipMedicine={handleSkipMedicine}
               vitalReadings={vitalReadings}
               onAddVital={handleAddVital}
+              doctorAppointments={doctorAppointments}
+              onUpdateAppointment={handleUpdateAppointment}
             />
         );
     }

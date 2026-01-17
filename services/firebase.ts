@@ -5,12 +5,12 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 // Replace with your Firebase project config (from Firebase Console)
 // Keep in a secure place for production; for demo, we inline placeholders.
 const firebaseConfig = {
-    apiKey: "AIzaSyDgqjvgawPY1SbhRpjxPi4OVSIqME2ZY7o",
+    apiKey: "AIzaSyA-GlAc7MNRTQbloPf725KkcLV3C8TMlNI", // Matches google-services.json
     authDomain: "safenest-d2db0.firebaseapp.com",
     projectId: "safenest-d2db0",
     storageBucket: "safenest-d2db0.firebasestorage.app",
     messagingSenderId: "167528436834",
-    appId: "1:167528436834:web:a306609d6a04f6a8ec6d3b",
+    appId: "1:167528436834:web:0f56359c983e3ea9ec6d3b", // Align with current Firebase app
     measurementId: "G-GXV2QD52WB",
     databaseURL: "https://safenest-d2db0-default-rtdb.firebaseio.com"
   };

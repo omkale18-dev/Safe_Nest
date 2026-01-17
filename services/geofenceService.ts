@@ -8,6 +8,18 @@ import { Geofence, GeofenceEvent } from '../types';
 const STORAGE_KEY = 'safenest_geofences';
 const NOTIFICATION_ID_BASE = 60000;
 
+// Native Geofence Plugin Interface
+interface NativeGeofencePlugin {
+  addGeofences(options: { geofences: Array<{ id: string; latitude: number; longitude: number; radius: number; label: string }> }): Promise<{ success: boolean }>;
+  removeGeofences(options: { ids?: string[] }): Promise<{ success: boolean }>;
+  checkPermissions(): Promise<{ fineLocation: boolean; backgroundLocation: boolean }>;
+}
+
+// Register the native plugin
+const NativeGeofence = Capacitor.isNativePlatform() 
+  ? registerPlugin<NativeGeofencePlugin>('NativeGeofence')
+  : null;
+
 /**
  * Geofence Service
  * 
@@ -15,6 +27,7 @@ const NOTIFICATION_ID_BASE = 60000;
  * - Senior leaves home (exit alert)
  * - Senior enters restricted area (entry alert)
  * 
+ * Uses native Android GeofencingClient for background-safe monitoring.
  * Useful for seniors with dementia or who need location monitoring.
  */
 class GeofenceService {
@@ -24,9 +37,36 @@ class GeofenceService {
   private householdId: string | null = null;
   private onEventCallback: ((event: GeofenceEvent) => void) | null = null;
   private insideGeofences: Set<string> = new Set(); // Track which geofences senior is inside
+  private nativeGeofencesRegistered = false;
 
   constructor() {
     this.loadGeofences();
+    this.setupNativeEventListener();
+  }
+
+  private setupNativeEventListener(): void {
+    // Listen for native geofence transition events
+    if (Capacitor.isNativePlatform()) {
+      window.addEventListener('geofenceTransition', (event: any) => {
+        try {
+          const data = typeof event.detail === 'string' ? JSON.parse(event.detail) : event.detail;
+          console.log('[Geofence] Native transition event:', data);
+          
+          const geofence = this.geofences.find(g => g.id === data.fenceId);
+          if (geofence && this.onEventCallback) {
+            this.onEventCallback({
+              type: data.type as 'enter' | 'exit',
+              geofence,
+              timestamp: new Date(),
+              location: this.lastPosition || { lat: geofence.latitude, lng: geofence.longitude },
+            });
+          }
+        } catch (e) {
+          console.error('[Geofence] Failed to parse native event:', e);
+        }
+      });
+      console.log('[Geofence] Native event listener registered');
+    }
   }
 
   private loadGeofences(): void {
@@ -73,8 +113,42 @@ class GeofenceService {
         }));
         this.saveGeofences();
         console.log('[Geofence] Synced from Firebase:', this.geofences.length);
+        
+        // Register with native plugin when synced
+        this.registerNativeGeofences();
       }
     });
+  }
+
+  /**
+   * Register geofences with native Android plugin for background monitoring
+   */
+  private async registerNativeGeofences(): Promise<void> {
+    if (!NativeGeofence || this.geofences.length === 0) return;
+    
+    try {
+      // Check permissions first
+      const perms = await NativeGeofence.checkPermissions();
+      if (!perms.fineLocation || !perms.backgroundLocation) {
+        console.warn('[Geofence] Missing location permissions for native geofencing');
+        return;
+      }
+      
+      // Format geofences for native plugin
+      const nativeGeofences = this.geofences.map(g => ({
+        id: g.id,
+        latitude: g.latitude,
+        longitude: g.longitude,
+        radius: g.radius,
+        label: g.name,
+      }));
+      
+      await NativeGeofence.addGeofences({ geofences: nativeGeofences });
+      this.nativeGeofencesRegistered = true;
+      console.log('[Geofence] ✓ Registered', nativeGeofences.length, 'geofences with native plugin (background-safe)');
+    } catch (e) {
+      console.error('[Geofence] Failed to register native geofences:', e);
+    }
   }
 
   /**
@@ -97,6 +171,9 @@ class GeofenceService {
         createdAt: newGeofence.createdAt.toISOString(),
       });
     }
+    
+    // Register with native plugin
+    await this.registerNativeGeofences();
 
     console.log('[Geofence] Added:', newGeofence.name);
     return newGeofence;
@@ -112,6 +189,16 @@ class GeofenceService {
 
     if (this.householdId) {
       await set(ref(db, `households/${this.householdId}/geofences/${id}`), null);
+    }
+    
+    // Remove from native plugin
+    if (NativeGeofence) {
+      try {
+        await NativeGeofence.removeGeofences({ ids: [id] });
+        console.log('[Geofence] Removed from native plugin:', id);
+      } catch (e) {
+        console.error('[Geofence] Failed to remove from native:', e);
+      }
     }
   }
 
@@ -130,6 +217,9 @@ class GeofenceService {
           createdAt: this.geofences[index].createdAt.toISOString(),
         });
       }
+      
+      // Re-register all geofences with native plugin (update by re-adding)
+      await this.registerNativeGeofences();
     }
   }
 

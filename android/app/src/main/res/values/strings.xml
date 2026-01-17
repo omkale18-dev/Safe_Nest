@@ -7,4 +7,5 @@
     <string name="widget_description">Emergency SOS button for quick access</string>
     <string name="widget_sos_description">Tap to immediately trigger SOS and alert caregivers</string>
     <string name="sos_button">Emergency SOS Button</string>
+    <string name="accessibility_service_description">SafeNest Volume Button SOS: Press volume UP or DOWN 3 times rapidly to trigger an emergency SOS alert. This will immediately notify your caregivers and emergency contacts.</string>
 </resources>
